@@ -5,6 +5,18 @@ module ownership and interface contracts, and for testing and pull requests.
 Use the implementation and its callers to verify behavior; report disagreements
 with documentation instead of assuming either is correct.
 
+## Project context
+
+- RPent is the primary workspace for ongoing project implementation. For
+  research carried over from ReinFlow, consult its `项目文档/研究基调与方向规划.md`
+  for goals and decisions and `项目文档/90_待办与执行状态.md` for research status
+  and TODOs. Keep those records authoritative until explicitly migrated.
+- Record repository responsibilities and interfaces as implemented; changing
+  the workspace or documentation does not establish a code migration.
+- Keep goals, decisions, evidence, and next steps in their owning project
+  documents, with entry points here. Update them when handing work between
+  sessions; avoid duplicate status records.
+
 ## Repository map
 
 - `rpent/planner/`, `rpent/session/`, and `rpent/prompt/`: planner adapters,
@@ -42,6 +54,23 @@ with documentation instead of assuming either is correct.
 - Test observable behavior and concrete regressions, reusing existing cases
   and fixtures where possible. Avoid tests that merely restate implementation
   details. Never weaken failing tests to make a change pass.
+
+## Execution and evidence
+
+- Confirm the interpreter, import paths, and relevant environment before
+  environment-dependent work. Keep machine-specific paths and credentials in
+  local configuration.
+- Start with bounded offline checks. Package changes, training, GPU evaluation,
+  batch rendering, downloads, and hardware access require explicit authorization
+  covering the action. Reuse existing authorization within its scope.
+- Coordinate file ownership across active sessions; use separate worktrees
+  when edits would overlap. Preserve other sessions' changes.
+- Select checks for the affected behavior and follow CONTRIBUTING's required
+  checks before a PR. Reuse valid results; repeat checks only after relevant
+  changes or new evidence.
+- Distinguish static inspection, offline tests, simulation, and real-robot
+  evidence. Report research results with their sources and conditions; a smoke
+  test or historical result does not establish current task or baseline success.
 
 ## Task skills
 
