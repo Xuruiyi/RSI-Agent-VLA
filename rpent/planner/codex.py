@@ -56,6 +56,7 @@ from rpent.planner.base import (
     strip_mcp_prefix,
 )
 from rpent.planner.utils.http_mcp_server import HttpMcpServer
+from rpent.session.runtime import RuntimeJournal, planner_admission
 from rpent.tools.toolkit import Toolkit
 from rpent.utils.config import get_repo_root
 from rpent.utils.logging import get_logger
@@ -139,6 +140,34 @@ class CodexPlanner(Planner):
         dashboard_interaction: DashboardInteractionPort | None = None,
     ) -> PlannerResult:
         """Run one or more Codex SDK turns for the given prompt."""
+        effort = self._turn_options["effort"].value
+        planner_admission("codex", self._model, effort)
+        journal = getattr(toolkit, "runtime_journal", None)
+        if journal is not None:
+            hint = journal.planner_finish_hint()
+            if hint:
+                journal.emit(
+                    "planner_rule_instruction",
+                    rule="planner_finish_reserve_calls",
+                    reserve_calls=journal.planner_finish_reserve_calls,
+                    tool_limit=journal.context["limits"]["tool_calls"],
+                    text=hint,
+                )
+                user_message += "\n\nRuntime planning rule:\n" + hint
+            directive = journal.context.get("planner", {}).get("diagnostic_instruction")
+            if directive:
+                journal.emit("diagnostic_instruction", text=directive)
+                user_message += (
+                    "\n\nExplicit bounded component diagnostic:\n" + directive
+                )
+            journal.emit(
+                "planner_request_options",
+                backend="codex",
+                model=self._model,
+                reasoning_effort=effort,
+                confirmation_source="CodexPlanner._turn_options",
+                backend_confirmed=None,
+            )
         if input_queue is not None and dashboard_interaction is not None:
             raise ValueError(
                 "input_queue and dashboard_interaction cannot be used together"
@@ -158,6 +187,7 @@ class CodexPlanner(Planner):
         recorder = _Recorder(
             max_turns=max_turns,
             dashboard_events=self._dashboard_events,
+            runtime_journal=journal,
         )
         state: dict[str, Any] = {}
 
@@ -354,10 +384,23 @@ class CodexPlanner(Planner):
                             if (
                                 str(_get(event, "method", "")) != "turn/completed"
                                 and not limit_reached
-                                and recorder.finish_result is None
-                                and recorder.turns >= recorder.max_turns
+                                and (
+                                    budget_stop := recorder.request_native_stop()
+                                    or recorder.request_budget_stop()
+                                )
+                                is not None
                             ):
                                 limit_reached = True
+                                _write_jsonl(
+                                    raw_f,
+                                    {
+                                        "method": "planner/controllerStop",
+                                        "type": "planner_native_stop"
+                                        if recorder.planner_native_stop
+                                        else "planner_budget_stop",
+                                        "budget_stop": budget_stop,
+                                    },
+                                )
                                 try:
                                     turn.interrupt()
                                 except openai_codex.JsonRpcError as exc:
@@ -374,7 +417,10 @@ class CodexPlanner(Planner):
             if recorder.final_response is not None:
                 last_message_path.write_text(recorder.final_response)
         except Exception as e:
-            state["error"] = e
+            if recorder.observe_native_gate_rejection(e):
+                state["text"] = "".join(chunks)
+            else:
+                state["error"] = e
 
     async def _solve_dashboard(
         self,
@@ -388,7 +434,9 @@ class CodexPlanner(Planner):
         """Run a controllable sequence of turns on one Codex thread."""
         output_path, raw_stream_path, last_message_path = self._output_paths()
         recorder = _Recorder(
-            max_turns=max_turns, dashboard_events=self._dashboard_events
+            max_turns=max_turns,
+            dashboard_events=self._dashboard_events,
+            runtime_journal=getattr(toolkit, "runtime_journal", None),
         )
         chunks: list[str] = []
         error: str | None = None
@@ -594,26 +642,39 @@ class _CodexDashboardSession:
                 payload = _get(event, "payload")
 
                 if (
-                    method == "item/completed"
-                    and _is_tool_item(_get(payload, "item"))
-                    and self._recorder.finish_result is None
-                    and self._recorder.turns < self._recorder.max_turns
-                ):
-                    await self._control.tool_completed(self)
-
-                if (
                     method != "turn/completed"
                     and not limit_reached
-                    and self._recorder.finish_result is None
-                    and self._recorder.turns >= self._recorder.max_turns
+                    and (
+                        budget_stop := self._recorder.request_native_stop()
+                        or self._recorder.request_budget_stop()
+                    )
+                    is not None
                 ):
                     limit_reached = True
+                    self._emit_event(
+                        {
+                            "method": "planner/controllerStop",
+                            "type": "planner_native_stop"
+                            if self._recorder.planner_native_stop
+                            else "planner_budget_stop",
+                            "budget_stop": budget_stop,
+                        }
+                    )
                     try:
                         await turn.interrupt()
                     except openai_codex.JsonRpcError as exc:
                         if exc.message != "no active turn to interrupt":
                             raise
                         # Keep consuming the stream to get the actual turn status.
+
+                if (
+                    method == "item/completed"
+                    and _is_tool_item(_get(payload, "item"))
+                    and self._recorder.finish_result is None
+                    and self._recorder.turns < self._recorder.max_turns
+                    and not limit_reached
+                ):
+                    await self._control.tool_completed(self)
 
                 if method != "turn/completed":
                     continue
@@ -623,12 +684,14 @@ class _CodexDashboardSession:
                 done.set()
                 if self._closing:
                     return
-                if status == "failed":
+                if status == "failed" and self._recorder.planner_native_stop is None:
                     self.error = self._recorder.error or "Codex turn failed"
                 if (
                     self.error is not None
                     or self._recorder.finish_result is not None
                     or self._recorder.turns >= self._recorder.max_turns
+                    or self._recorder.planner_native_stop is not None
+                    or self._recorder.planner_budget_stop is not None
                 ):
                     self._control.end()
                 else:
@@ -639,7 +702,8 @@ class _CodexDashboardSession:
             self._turn = None
             self._turn_done = None
             done.set()
-            self.error = f"{type(exc).__name__}: {exc}"
+            if not self._recorder.observe_native_gate_rejection(exc):
+                self.error = f"{type(exc).__name__}: {exc}"
             if not self._closing:
                 self._control.end()
 
@@ -669,15 +733,113 @@ class _Recorder:
     final_response: str | None = None
     finish_result: dict[str, Any] | None = None
     error: str | None = None
+    planner_turn_status: str | None = None
+    runtime_journal: RuntimeJournal | None = None
+    planner_budget_stop: dict[str, Any] | None = None
+    planner_native_stop: dict[str, Any] | None = None
 
-    def stats(self) -> dict[str, int]:
-        return {"turns_used": self.turns, "tool_calls": self.tool_calls, **self.usage}
+    def stats(self) -> dict[str, Any]:
+        budget_closed = (
+            self.planner_budget_stop is not None
+            and self.planner_turn_status == "interrupted"
+            and self.error is None
+        )
+        return {
+            "turns_used": self.turns,
+            "tool_calls": self.tool_calls,
+            "usage_observed": bool(self._seen_usage),
+            "planner_turn_status": self.planner_turn_status,
+            "attempt_closed": (
+                self.planner_turn_status == "completed" and self.error is None
+            )
+            or budget_closed
+            or (self.planner_native_stop is not None and self.error is None),
+            "planner_native_stop": self.planner_native_stop,
+            "termination_reason": "native_success"
+            if self.planner_native_stop is not None and self.error is None
+            else "verified_budget_exhaustion"
+            if self.planner_budget_stop is not None
+            and self.error is None
+            and self.planner_turn_status in {"interrupted", "completed"}
+            else self.planner_turn_status,
+            "planner_budget_stop": self.planner_budget_stop,
+            **self.usage,
+        }
+
+    def observe_native_gate_rejection(self, error: Any) -> bool:
+        """Recognize only our local post-success admission rejection, keeping other errors."""
+        if "native task completed; no further Planner request forwarded" not in str(
+            error
+        ):
+            return False
+        journal = self.runtime_journal
+        marker = journal.native_completion() if journal is not None else None
+        if marker is None:
+            return False
+        self.planner_native_stop = marker
+        journal.emit("planner_native_admission_closed", sdk_error=str(error))
+        return True
+
+    def request_native_stop(self) -> dict[str, Any] | None:
+        """Interrupt the SDK control loop without classifying native success as cancellation."""
+        journal = self.runtime_journal
+        if (
+            self.planner_native_stop is not None
+            or journal is None
+            or journal.active_tools
+        ):
+            return None
+        marker = journal.native_completion()
+        if marker is not None:
+            self.planner_native_stop = marker
+        return marker
+
+    def request_budget_stop(self) -> dict[str, Any] | None:
+        """Record a local controller stop after admitted tools have drained."""
+        if (
+            self.finish_result is not None
+            or self.error is not None
+            or self.planner_budget_stop is not None
+        ):
+            return None
+        if self.planner_turn_status in {"interrupted", "cancelled", "failed"}:
+            return None
+        journal = self.runtime_journal
+        marker = journal.budget_stop() if journal is not None else None
+        if marker is None and self.turns >= self.max_turns:
+            if journal is not None:
+                marker = journal.mark_budget_stop(
+                    "max_turns", limit=self.max_turns, observed=self.turns
+                )
+            else:
+                marker = {
+                    "schema_version": "1.0",
+                    "reason": "max_turns",
+                    "limit": self.max_turns,
+                    "observed": self.turns,
+                    "stop_after_inflight": True,
+                }
+        if marker is None or (journal is not None and journal.active_tools):
+            return None
+        stop = dict(marker)
+        if journal is not None:
+            stop.update(
+                budget_stop_ref=str(journal.budget_stop_path),
+                planner_events_ref=str(journal.events_path),
+                planner_event_sequence=journal.emit(
+                    "planner_budget_stop", budget_stop=marker
+                ),
+            )
+        self.planner_budget_stop = stop
+        return stop
 
     def observe(self, event: Any) -> str:
         method = str(_get(event, "method", ""))
         payload = _get(event, "payload")
 
         if method in {"thread/started", "turn/started"}:
+            if method == "turn/started":
+                self.planner_turn_status = None
             return f"[codex-system] {method}\n"
         if method == "item/completed":
             return self._render_item(_get(payload, "item"))
@@ -749,7 +911,11 @@ class _Recorder:
             )
             self.dashboard_events.emit(
                 TranscriptEvent(
-                    {"type": "tool_result", "tool": name, "result": payload}
+                    {
+                        "type": "tool_result",
+                        "tool": name,
+                        "result": payload,
+                    }
                 )
             )
             return f"[tool<-] {name}: {json.dumps(payload, ensure_ascii=False)}\n"
@@ -758,9 +924,12 @@ class _Recorder:
 
     def _render_turn_completed(self, turn: Any) -> str:
         status = str(_get(_get(turn, "status"), "value", _get(turn, "status", "")))
+        self.planner_turn_status = status
         duration_ms = _get(turn, "duration_ms")
         if error := _get(turn, "error"):
-            self.error = str(_get(error, "message", str(error)))
+            message = str(_get(error, "message", str(error)))
+            if not self.observe_native_gate_rejection(message):
+                self.error = message
 
         parts = ["[codex-result]", status]
         if duration_ms is not None:
@@ -875,6 +1044,39 @@ def build_codex_config(
     if api_key:
         env[PROVIDER_ENV_KEY] = api_key
     config_overrides = _codex_mcp_config_overrides(mcp_url=mcp_url, base_url=base_url)
+    if gate_url := os.environ.get("RSI_REQUEST_GATE_URL"):
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10
+            import tomli as tomllib
+
+        codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        user_config = codex_home / "config.toml"
+        inherited = (
+            tomllib.loads(user_config.read_text()) if user_config.exists() else {}
+        )
+        for server_name in inherited.get("mcp_servers", {}):
+            if server_name != "rpent":
+                config_overrides.append(f"mcp_servers.{server_name}.enabled=false")
+        # This provider retains native OpenAI login; only the local transport
+        # adds request admission before forwarding to the same Codex service.
+        config_overrides.extend(
+            [
+                'model_provider="rsi_budget"',
+                'model_providers.rsi_budget.name="RSI bounded Codex transport"',
+                f"model_providers.rsi_budget.base_url={json.dumps(gate_url)}",
+                'model_providers.rsi_budget.wire_api="responses"',
+                "model_providers.rsi_budget.requires_openai_auth=true",
+                "model_providers.rsi_budget.supports_websockets=false",
+                "model_providers.rsi_budget.request_max_retries=0",
+                "model_providers.rsi_budget.stream_max_retries=0",
+                "features.shell_tool=false",
+                "features.view_image=false",
+                "features.multi_agent=false",
+                "features.apps=false",
+                'web_search="disabled"',
+            ]
+        )
     # Project development instructions and skills are excluded from planner context.
     config_overrides.append("project_doc_max_bytes=0")
     disabled_skills = [

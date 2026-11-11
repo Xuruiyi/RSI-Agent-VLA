@@ -196,9 +196,11 @@ Fast-WAM 使用 ``--am-backend fast-wam`` 及其 worker 地址。LIBERO-Pro 需�
 查看结果
 ------------
 
-终端会显示服务器启动、规划器对话和工具调用。结束后查看输出目录中的 ``episode.mp4``、``transcript_*.json`` 和 ``run.log``；默认目录与逐步观测文件见 :ref:`run-output-files`。
+终端会显示服务器启动、规划器对话和工具调用。结束后查看输出目录中的 ``result.json``、``episode.mp4``、``transcript_*.json`` 和 ``run.log``；默认目录与逐步观测文件见 :ref:`run-output-files`。
 
 通过 ``view_env_state(step=-1)`` 查看最终状态，顶层 ``terminated`` 表示环境是否判定成功。规划器调用 ``finish`` 只表示结束规划。实时观察方法见 :doc:`../guides/dashboard`。
+
+``result.json`` 将最后一次尝试的原生 ``terminated``、``truncated`` 与 ``planner_finish``、``tool_successes`` 分开记录。LIBERO 以整任务成功谓词生成 ``terminated``，RLinf 在达到步数上限时生成 ``truncated``。原生成功时 ``benchmark_success`` 为 true；未成功且达到上限时为 false；尝试仍在进行或缺少原生证据时为 null，由 ``benchmark_status`` 区分具体状态。工具的 success 可能只是抓取启发式判定。释放、落稳等额外过程标签在独立测量前保持 null。transcript 中的 ``environment_success`` 保留工具包会话级 ``solved()`` 判定，不将未结束的尝试归为 benchmark 失败。异常与原生成功结果分别记录。
 
 .. _libero-exploration:
 
@@ -260,6 +262,7 @@ LIBERO 工具分为物理动作工具和只读工具。
 
 **物理动作工具：**
 
+- ``vla_execute(instruction, max_chunks=...)`` —— 在有界执行段内连续执行任务或子目标；显式传入 1—24 次预测额度，每个 chunk 保留五步原生动作。
 - ``pi0_pick(prompt, ...)`` —— 调用 Pi0.5 执行闭环抓取。
 - ``pi0_doubled(prompt, ...)`` —— 调用 Pi0.5 执行非抓取类接触动作。
 - ``move_to(xyz, ...)`` —— 将末端执行器移动到世界坐标系中的目标位置。
@@ -279,7 +282,27 @@ LIBERO 工具分为物理动作工具和只读工具。
 - ``view_camera_meta(camera=..., step=-1)`` —— 读取指定步骤的相机元数据； ``-1`` 表示最新状态。
 - ``finish(status, summary)`` —— 结束当前运行。
 
-这些工具不会推进环境。
+
+- ``back_project_batch(points, step=-1, camera="agentview", resolution="high")``
+  在一次只读调用中定位多组有序的 ``[row, col]`` 像素；逐点保留
+  ``back_project`` 的结果或错误，不合并机器人动作。
+
+显式绑定 RSI 的运行在工具反馈中提供 ``runtime_budget`` 预算 owner 快照。
+Launcher 在进程和传输清理后保存 ``independent_result.json`` 和
+``cost_breakdown.json``，Planner 未调用 ``finish`` 时也会保存。缺证或技术中断仍为
+unknown。可选 ``libero-startup-v1`` 输入在启动时提供相关公共记忆及按需指南入口。
+
+
+这些只读工具不会推进环境。
+
+有界 VLA 连续执行
+~~~~~~~~~~~~~~~~~
+
+可选 ``bounded-vla-v1`` / ``libero-startup-v2-bounded-vla`` 路径由 Planner 选择目标、监督执行段结果，并决定继续、切换工具、恢复或停止。VLA 每次预测使用最新观测，指令仅作用于本次调用。chunk 额度必须显式传入，且继续服从整回合步数、时间和取消约束。未取得原生成功时额度用尽，表示本段结束、任务尚未完成，不表示阶段失败。``pi0_pick`` 保持抓取专用，``pi0_doubled`` 保持接触专用，WAM 沿用独立接口。
+
+``view_env_state(image_detail="calibrated")`` 发送有标定的全局及腕部图像；``image_detail="full"`` 额外发送 policy 视图。绑定 v9 的运行默认精简反馈。``image_frames`` 提供定位所需相机、步骤及 high/low 分辨率。VLA 输入、磁盘原始媒体及评价证据保持原样。
+
+原生成功会自动关闭 Planner 准入。每次内部预测和动作继续保留证据与成本，Launcher 无需 Planner 重写审计即可保存结果。缺失 usage 保持未知，cached input 为 input 子集。旧 startup-v1 和 hybrid 指南保留细粒度路径；其中仅抓取的分工不约束 startup-v2。离线检查验证接口，不代表真实任务能力或节约效果。
 
 Dashboard
 ---------

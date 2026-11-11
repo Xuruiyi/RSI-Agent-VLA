@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -314,6 +315,8 @@ def test_dashboard_exploration_finalizes_memory_and_reports_merge_failures(
     if collect_metrics:
         assert len(finalized) == 1
         assert finalized[0].environment_metrics == {"score": 10 * sessions}
+    transcript = json.loads((output_dir / "transcript_libero_s0.json").read_text())
+    assert transcript["environment_success"] is True
     assert error is None
     assert state.toolkit_lifecycle == ["bound", "unbound"] * sessions
     assert merge_calls == [

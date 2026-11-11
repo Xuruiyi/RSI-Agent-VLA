@@ -94,6 +94,7 @@ def _resolve_dashboard(args: argparse.Namespace) -> DashboardSpec:
         ),
         "primitives": (
             "move_to",
+            "vla_execute",
             "pi0_pick",
             "pi0_doubled",
             "wam_act",
@@ -120,6 +121,7 @@ def get_robot_spec() -> RobotSpec:
     the LIBERO toolkit (see :func:`get_toolkit`).
     """
     from robots.libero.memory import prepare_memory, validate_options
+    from robots.libero.result import finalize_run
 
     return RobotSpec(
         name="libero",
@@ -135,6 +137,7 @@ def get_robot_spec() -> RobotSpec:
         run_flash=_run_flash,
         validate_args=validate_options,
         prepare_memory=prepare_memory,
+        finalize_run=finalize_run,
     )
 
 

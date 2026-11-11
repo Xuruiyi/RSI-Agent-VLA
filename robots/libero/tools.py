@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -29,7 +30,9 @@ from robots.libero.env_client import LiberoEnvClient
 from rpent.robots.components.molmo_client import MolmoClient
 from rpent.robots.components.sam3_client import Sam3Client
 from rpent.session import EnvState, StepRecord
+from rpent.session.runtime import RuntimeBudgetExceeded
 from rpent.tools import Tool, ToolResult, tool
+from rpent.tools.toolkit import ToolCancelled
 from rpent.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -66,6 +69,7 @@ class LiberoPrimitives:
         molmo_client: MolmoClient | None = None,
         flywheel_config: dict[str, Any] | None = None,
         policy_kind: str = "vla",
+        runtime_journal=None,
     ):
         self.env = env
         self.model = model
@@ -86,6 +90,8 @@ class LiberoPrimitives:
         self._frames = []
         self._flywheel_config = flywheel_config
         self._flywheel = None
+        self.runtime_journal = runtime_journal
+        self._active_primitive = "scripted"
 
     def start_recording(self):
         self._recording = True
@@ -130,6 +136,7 @@ class LiberoPrimitives:
         return self._last_obs, info
 
     def begin_primitive(self, name: str) -> None:
+        self._active_primitive = name
         if self._flywheel is not None:
             self._flywheel.begin_primitive(name)
 
@@ -143,7 +150,30 @@ class LiberoPrimitives:
     def _step_env(self, action) -> None:
         """Execute one env action between cancellation checkpoints."""
         self._check_cancelled()
-        obs, reward, terminated, truncated, _info = self.env.step(action)
+        if self.runtime_journal is None:
+            result = self.env.step(action)
+        else:
+            journal = self.runtime_journal
+            proposal = journal.emit(
+                "action_proposal", source=self._active_primitive, proposal=action
+            )
+            result = self.runtime_journal.action(
+                lambda send_sequence: self.env.rsi_step(
+                    action,
+                    evidence={
+                        **journal.identity(),
+                        "client_send_sequence": send_sequence,
+                        "proposal_sequence": proposal,
+                        "proposal_indices": [0],
+                        "proposal_length": 1,
+                    },
+                ),
+                action,
+                source=self._active_primitive,
+                proposal_sequence=proposal,
+                callback_with_send_sequence=True,
+            )
+        obs, reward, terminated, truncated, _info = result
         if self._flywheel is not None:
             self._flywheel.add_transition(action, obs, reward, terminated, truncated)
         self.set_obs(obs)
@@ -170,19 +200,108 @@ class LiberoPrimitives:
         self._check_cancelled()
         policy_obs = (self._last_obs if raw_obs is None else raw_obs).copy()
         policy_obs["task_descriptions"] = instruction
-        actions = self.model.predict(policy_obs, options={"mode": "eval"})
+        journal = self.runtime_journal
+        inference_sequence = None
+        if journal is not None:
+            journal.check()
+            inference_sequence = journal.emit(
+                "inference_start", source=self.policy_kind, instruction=instruction
+            )
+        started = time.monotonic()
+        self._last_chunk_report = {
+            "predictions_started": 1,
+            "predictions_completed": 0,
+            "executed_steps": 0,
+            "unknown_steps": 0,
+        }
+        try:
+            actions = self.model.predict(policy_obs, options={"mode": "eval"})
+            self._last_chunk_report["predictions_completed"] = 1
+        finally:
+            if journal is not None:
+                journal.emit(
+                    "inference_end",
+                    source=self.policy_kind,
+                    inference_sequence=inference_sequence,
+                    completed=bool(self._last_chunk_report["predictions_completed"]),
+                    elapsed_seconds=time.monotonic() - started,
+                )
+        proposal_sequence = None
+        proposal_length = len(actions)
+        if journal is not None:
+            proposal_sequence = journal.emit(
+                "action_proposal",
+                source=self.policy_kind,
+                proposal=actions,
+                inference_sequence=inference_sequence,
+                instruction=instruction,
+                model_request_options={"mode": "eval"},
+                missing=["server_capture_clock", "model_backend_revision_confirmation"],
+            )
         self._check_cancelled()
         vla_id = (
             self._flywheel.add_proposal(instruction, actions)
             if self._flywheel is not None
             else -1
         )
+        if journal is not None and journal.chunk_steps is not None:
+            actions = actions[: journal.chunk_steps]
+
+        def send_chunk(**kwargs):
+            if journal is None:
+                return self.env.chunk_step(actions, **kwargs)
+            return journal.action(
+                lambda send_sequence: self.env.rsi_chunk_step(
+                    actions,
+                    evidence={
+                        **journal.identity(),
+                        "client_send_sequence": send_sequence,
+                        "proposal_sequence": proposal_sequence,
+                        "proposal_indices": list(range(len(actions))),
+                        "proposal_length": proposal_length,
+                    },
+                    **kwargs,
+                ),
+                actions,
+                source=self.policy_kind,
+                proposal_sequence=proposal_sequence,
+                proposal_length=proposal_length,
+                chunk=True,
+                callback_with_send_sequence=True,
+            )
+
+        def chunk_step(**kwargs):
+            started = time.monotonic()
+            try:
+                result = send_chunk(**kwargs)
+            except RuntimeBudgetExceeded:
+                # Client pre-dispatch rejection sends no RPC.
+                raise
+            except Exception:
+                # RPC failure may follow partial execution. Owner evidence is authoritative.
+                self._last_chunk_report["unknown_steps"] = len(actions)
+                raise
+            else:
+                term = np.asarray(result[2])
+                self._last_chunk_report["executed_steps"] = (
+                    len(term) if term.ndim else len(actions)
+                )
+                return result
+            finally:
+                if journal is not None:
+                    journal.emit(
+                        "chunk_execution_end",
+                        source=self.policy_kind,
+                        elapsed_seconds=time.monotonic() - started,
+                        **self._last_chunk_report,
+                    )
+
         if not self._recording and self._flywheel is None:
-            chunk_obs, _r, _t, _tr, _i = self.env.chunk_step(actions)
+            chunk_obs, _r, _t, _tr, _i = chunk_step()
             obs = chunk_obs[-1] if self.env.return_all_frames else chunk_obs
         else:
-            chunk_obs, rewards, terminated, truncated, _info = self.env.chunk_step(
-                actions, return_all_frames=True
+            chunk_obs, rewards, terminated, truncated, _info = chunk_step(
+                return_all_frames=True
             )
             for index, obs in enumerate(chunk_obs):
                 if self._recording:
@@ -235,6 +354,107 @@ class LiberoPrimitives:
                 "truncated": self.env.truncated,
             }
         )
+
+    @tool
+    def vla_execute(
+        self,
+        instruction: Annotated[str, Field(min_length=1)],
+        *,
+        max_chunks: Annotated[int, Field(strict=True, ge=1, le=24)],
+    ) -> ToolResult:
+        """Execute a task or subgoal continuously from latest observations within an explicit chunk allowance. Each prediction uses the existing VLA processor and five-action chunk. Planner chooses goals, supervises, switches tools or recovers between segments; no per-chunk Planner call is required. Allowance exhaustion means unfinished, not stage failure. Only native termination establishes task success.
+
+        Args:
+            instruction: Explicit task or subgoal text, local to this invocation.
+            max_chunks: Required prediction allowance, from 1 to 24.
+        """
+        if not isinstance(instruction, str) or not instruction.strip():
+            raise ValueError("instruction must be non-empty")
+        if type(max_chunks) is not int or not 1 <= max_chunks <= 24:
+            raise ValueError("max_chunks must be an integer between 1 and 24")
+        if self.policy_kind != "vla":
+            raise ValueError("vla_execute requires the VLA backend")
+        totals = {
+            "predictions_started": 0,
+            "predictions_completed": 0,
+            "executed_steps": 0,
+            "unknown_steps": 0,
+        }
+        reason, error = "chunk_allowance", None
+        journal = self.runtime_journal
+        try:
+            for _ in range(max_chunks):
+                if self.env.terminated or self.env.truncated:
+                    break
+                self._check_cancelled()
+                if journal is not None:
+                    journal.check()
+                    if (journal.output_dir / "runtime_stop.json").exists():
+                        raise ToolCancelled("runtime stopped by supervisor")
+                    stop = journal.budget_stop()
+                    if stop is not None and stop["reason"] not in {
+                        "tool_calls",
+                        "model_requests",
+                    }:
+                        raise RuntimeBudgetExceeded(
+                            f"runtime budget stopped: {stop['reason']}"
+                        )
+                    remaining = journal.budget_snapshot()["environment_steps_remaining"]
+                    if remaining is not None and remaining < 5:
+                        limit = journal.context["limits"]["environment_steps"]
+                        journal.mark_budget_stop(
+                            "environment_steps",
+                            limit=limit,
+                            observed=limit - remaining,
+                            requested_steps=5,
+                        )
+                        raise RuntimeBudgetExceeded(
+                            "remaining budget cannot fit a five-step chunk"
+                        )
+                self._last_chunk_report = dict.fromkeys(totals, 0)
+                try:
+                    self._vlm_chunk(instruction)
+                finally:
+                    for key in totals:
+                        totals[key] += self._last_chunk_report[key]
+        except RuntimeBudgetExceeded as exc:
+            reason, error = "budget", str(exc)
+        except ToolCancelled as exc:
+            reason, error = "cancelled", str(exc)
+        except Exception as exc:
+            reason, error = "technical_error", f"{type(exc).__name__}: {exc}"
+        if error is None:
+            reason = (
+                "native_success"
+                if self.env.terminated
+                else "native_truncation"
+                if self.env.truncated
+                else reason
+            )
+        data = {
+            "name": "vla_execute",
+            "version": "bounded-vla-v1",
+            "instruction": instruction,
+            "max_chunks": max_chunks,
+            "chunks_used": totals["predictions_completed"],
+            **totals,
+            "terminated": self.env.terminated,
+            "truncated": self.env.truncated,
+            "task_success": bool(self.env.terminated),
+            "stop_reason": reason,
+            "segment_status": "allowance_ended_task_unfinished"
+            if reason == "chunk_allowance"
+            else reason,
+            "runtime_budget": journal.budget_snapshot() if journal else None,
+        }
+        if error is not None:
+            data["diagnostic"] = error
+        if error is not None and reason != "budget":
+            data["error"] = error
+            data["interrupted"] = reason == "cancelled"
+        if journal is not None:
+            journal.emit("vla_segment_end", **data)
+        return ToolResult(data=data)
 
     @tool
     def pi0_pick(
@@ -627,7 +847,11 @@ class LiberoPrimitives:
             err = float(target_pitch - cur_pitch)
             err = (err + np.pi) % (2 * np.pi) - np.pi
             traj.append(
-                {"step": step, "pitch": round(cur_pitch, 4), "err": round(err, 4)}
+                {
+                    "step": step,
+                    "pitch": round(cur_pitch, 4),
+                    "err": round(err, 4),
+                }
             )
             if abs(err) < tol:
                 break
@@ -1337,11 +1561,13 @@ def view_env_state(
     step: Annotated[int, Field(json_schema_extra={"default": -1})] = -1,
     *,
     state: EnvState,
+    image_detail: Literal["full", "calibrated"] | None = None,
 ) -> ToolResult:
     """Read one recorded state and its observation artifacts. Step -1 selects the latest entry. Embeds policy, agentview, and wrist images when available. Use the calibration-frame images for pixel back-projection; JSON state alone is not enough. Use agentview for global tabletop layout and object locations; use wrist for close-range details near the gripper, occlusions, and container/cabinet interiors.
 
     Args:
         step: Step number; 0 = initial, -1 = latest.
+        image_detail: full includes policy view; calibrated omits it and keeps calibrated global/wrist views. Original media remain on disk.
     """
     images: list[bytes] = []
     try:
@@ -1364,15 +1590,28 @@ def view_env_state(
         "result": record.result,
         "elapsed_s": record.elapsed_s,
     }
-    for names in (
-        ("agentview_policy.png",),
-        ("agentview_high.png", "agentview.png"),
-        ("wrist_high.png", "wrist.png"),
-    ):
+    image_detail = image_detail or "full"
+    if image_detail not in {"full", "calibrated"}:
+        raise ValueError("image_detail must be full or calibrated")
+    out["image_detail"] = image_detail
+    out["image_frames"] = []
+    groups = [("agentview_high.png", "agentview.png"), ("wrist_high.png", "wrist.png")]
+    if image_detail == "full":
+        groups.insert(0, ("agentview_policy.png",))
+    for names in groups:
         name = next((name for name in names if name in record.artifacts), None)
         if name:
             try:
                 images.append(state.load_bytes(name, step=nn))
+                out["image_frames"].append(
+                    {
+                        "artifact": name,
+                        "step": nn,
+                        "camera": "wrist" if name.startswith("wrist") else "agentview",
+                        "resolution": "high" if "_high" in name else "low",
+                        "back_project_compatible": "policy" not in name,
+                    }
+                )
             except FileNotFoundError:
                 pass
     return ToolResult(data=out, images=images)
@@ -1665,6 +1904,8 @@ def back_project(
             }
         )
 
+    if type(row) is not int or type(col) is not int:
+        return ToolResult(data={"error": "row and col must be integers"})
     if row < 0 or row >= height or col < 0 or col >= width:
         return ToolResult(
             data={
@@ -1719,3 +1960,62 @@ def back_project(
     if depth_m is not None:
         out["depth_m"] = round(depth_m, 4)
     return ToolResult(data=out)
+
+
+@tool(readonly=True, exclude=("state",))
+def back_project_batch(
+    points: list[Any],
+    step: Annotated[int, Field(json_schema_extra={"default": -1})] = -1,
+    camera: Literal["agentview", "wrist"] = "agentview",
+    resolution: Literal["high", "low"] = "high",
+    *,
+    state: EnvState,
+) -> ToolResult:
+    """Localize several pixels in one read-only call using back_project.
+
+    Args:
+        points: Ordered [row, col] pixels from the same camera image.
+        step: Observation step; -1 selects the latest once for the whole batch.
+        camera: Camera used to select all pixels.
+        resolution: Image resolution used to select all pixels.
+
+    Results retain one entry per pixel, including individual errors. No motion.
+    """
+    if not isinstance(points, list) or not points:
+        return ToolResult(
+            data={"error": "points must be a nonempty list of [row, col]"}
+        )
+    try:
+        selected_step = state.get(step).step_idx
+    except Exception as exc:
+        return ToolResult(
+            data={
+                "results": [
+                    {
+                        "index": index,
+                        "pixel": point,
+                        "error": f"state step not available: {exc}",
+                    }
+                    for index, point in enumerate(points)
+                ]
+            }
+        )
+    results = []
+    for index, point in enumerate(points):
+        if (
+            not isinstance(point, list)
+            or len(point) != 2
+            or any(type(v) is not int for v in point)
+        ):
+            value = {"error": "point must be [row, col] integers"}
+        else:
+            value = back_project(
+                row=point[0],
+                col=point[1],
+                step=selected_step,
+                camera=camera,
+                resolution=resolution,
+                state=state,
+            ).data
+        results.append({"index": index, "pixel": point, **value})
+    return ToolResult(data={"step": selected_step, "results": results})

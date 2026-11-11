@@ -43,6 +43,7 @@ EVALUATION_TOOLS = COMMON_TOOLS | {
     "view_env_state",
     "move_to",
     "pi0_pick",
+    "vla_execute",
     "pi0_doubled",
     "release",
     "set_gripper",
@@ -52,6 +53,7 @@ EVALUATION_TOOLS = COMMON_TOOLS | {
     "view_camera_meta",
     "segment",
     "back_project",
+    "back_project_batch",
 }
 
 
@@ -220,6 +222,7 @@ def test_toolkit_modes_construct_with_fake_primitives(
         "view_env_state",
         "view_camera_meta",
         "back_project",
+        "back_project_batch",
         "segment",
     }
     assert _readonly_names(exploration) == _readonly_names(evaluation)

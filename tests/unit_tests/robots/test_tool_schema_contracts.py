@@ -70,8 +70,17 @@ def test_tool_declarations_match_pre_refactor_contracts(group: str) -> None:
             ).read_text()
         )
     if group == "libero":
-        # The yaw fix deliberately extends the native declaration while all
-        # other pre-refactor contracts remain unchanged.
+        # Keep explicit snapshots for the runtime tools and observation option;
+        # other contracts retain the pre-refactor baseline plus the yaw fix.
+        expected.update(
+            json.loads(
+                (
+                    Path(__file__).parent
+                    / "fixtures"
+                    / "libero_runtime_tool_schemas.json"
+                ).read_text()
+            )
+        )
         move = expected["move_to"]
         move["description"] = move["description"].replace(
             "Holds orientation (use rotate_wrist / rotate_pitch / move_pose to reorient).",

@@ -96,6 +96,40 @@ class LiberoEnvClient(BaseEnvClient):
     def raw_obs(self) -> dict:
         return self._client.call("env.raw_obs", timeout_s=self._TIMEOUT_S["default"])
 
+    def rsi_step(self, action, *, evidence: dict) -> tuple[Any, Any, Any, Any, Any]:
+        """Send one action with run identity and the already-persisted send ID."""
+        assert not (self.terminated or self.truncated), (
+            "env.step called after term/trunc"
+        )
+        result = self._client.call(
+            "env.rsi_step",
+            args=(action,),
+            kwargs={"evidence": evidence},
+            timeout_s=self._TIMEOUT_S["env.step"],
+        )
+        self.last_obs = result[0]
+        self.check_done(result[2], result[3])
+        return result
+
+    def rsi_chunk_step(
+        self, actions, *, evidence: dict, return_all_frames: bool | None = None
+    ) -> tuple[Any, Any, Any, Any, Any]:
+        """Send a chunk with an explicit proposal index for every dispatch slot."""
+        assert not (self.terminated or self.truncated), (
+            "env.chunk_step called after term/trunc"
+        )
+        if return_all_frames is None:
+            return_all_frames = self.return_all_frames
+        result = self._client.call(
+            "env.rsi_chunk_step",
+            args=(actions,),
+            kwargs={"evidence": evidence, "return_all_frames": return_all_frames},
+            timeout_s=self._TIMEOUT_S["env.chunk_step"],
+        )
+        self.last_obs = result[0][-1] if isinstance(result[0], list) else result[0]
+        self.check_done(result[2], result[3])
+        return result
+
     def render_camera(
         self,
         camera_name: str = "agentview",

@@ -804,14 +804,16 @@ def test_full_cli_exploration_finalizes_memory_without_starting_gpu_runtime(
 
 
 @pytest.mark.parametrize("planner_name", ["codex", "flash"])
+@pytest.mark.parametrize("has_finalizer", [False, True])
 @pytest.mark.parametrize(
-    "planner_error", [None, "RuntimeError: Grasp not held; replay stopped"]
+    "planner_error", [None, "RuntimeError: Grasp not held; replay stopped", "raise"]
 )
 def test_full_cli_calls_robot_result_finalizer_without_robot_special_case(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     planner_name: str,
     planner_error: str | None,
+    has_finalizer: bool,
 ) -> None:
     cli = _cli_module()
     from rpent.evaluation import RunFinalizationContext, write_json_atomic
@@ -848,6 +850,8 @@ def test_full_cli_calls_robot_result_finalizer_without_robot_special_case(
     class FakePlanner:
         def solve(self, **kwargs: Any) -> PlannerResult:
             del kwargs
+            if planner_error == "raise":
+                raise RuntimeError("planner failed")
             return PlannerResult(
                 finish_result={"status": "success", "summary": "planner claim"},
                 messages=[],
@@ -893,7 +897,7 @@ def test_full_cli_calls_robot_result_finalizer_without_robot_special_case(
         add_cli_args=add_cli_args,
         parse_config=parse_config,
         init_runtime=lambda *args: ([daemon], {"runtime": "simulated"}),
-        finalize_run=finalize_run,
+        finalize_run=finalize_run if has_finalizer else None,
         run_flash=lambda *args: {},
     )
 
@@ -931,29 +935,88 @@ def test_full_cli_calls_robot_result_finalizer_without_robot_special_case(
 
     assert cli.main() == (1 if planner_error else 0)
     transcript = json.loads((tmp_path / "transcript_OpenDrawer_s1.json").read_text())
-    assert transcript["error"] == planner_error
+    expected_error = (
+        "RuntimeError: planner failed" if planner_error == "raise" else planner_error
+    )
+    assert transcript["error"] == expected_error
+    assert transcript["environment_success"] is False
+    assert robot_toolkit.closed is True
+    assert robot_toolkit.drained is True
+    assert daemon.stopped is True
+    if not has_finalizer:
+        assert captured == []
+        return
 
     assert len(captured) == 1
     context = captured[0]
     assert context.robot_name == "testrobot"
     assert context.environment_success is False
     assert context.environment_metrics == {"score": 40.0}
-    assert context.agent_error == planner_error
+    assert context.agent_error == expected_error
     assert context.planner == planner_name
     assert context.model == "gpt-5.5"
     assert context.reasoning_effort == "xhigh"
     assert context.max_turns == 100
     assert context.planner_timeout_s == 1800
-    assert context.stats == {"tool_calls": 0}
+    assert context.stats == ({} if planner_error == "raise" else {"tool_calls": 0})
     assert json.loads((tmp_path / "result.json").read_text(encoding="utf-8")) == {
         "robot": "testrobot",
         "task": {"task_name": "OpenDrawer", "seed": 1},
         "success": False,
         "score": 40.0,
-        "planner_claim": {"status": "success", "summary": "planner claim"},
+        "planner_claim": None
+        if planner_error == "raise"
+        else {"status": "success", "summary": "planner claim"},
     }
     assert robot_toolkit.closed is True
     assert daemon.stopped is True
+
+
+def test_libero_startup_failure_writes_unknown_native_result(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from robots.libero.robot_spec import get_robot_spec
+
+    cli = _cli_module()
+
+    def fail_startup(*args):
+        raise RuntimeError("offline startup failure")
+
+    spec = replace(get_robot_spec(), init_runtime=fail_startup)
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "MEMORY.md").write_text("Offline test corpus.")
+    monkeypatch.setattr(cli, "get_robot_spec", lambda name: spec)
+    monkeypatch.setattr(cli, "build_planner", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rpent",
+            "--robot",
+            "libero",
+            "--suite",
+            "libero_object_swap",
+            "--task",
+            "2",
+            "--planner",
+            "codex",
+            "--model",
+            "offline",
+            "--memory-profile",
+            "local",
+            "--memory-dir",
+            str(tmp_path / "memory"),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert cli.main() == 1
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["benchmark_success"] is None
+    assert result["benchmark_status"] == "unknown"
+    assert result["terminated"] is None and result["truncated"] is None
+    assert result["planner_finish"] is None
+    assert result["error"] == "RuntimeError: offline startup failure"
 
 
 @pytest.mark.parametrize("dashboard", [False, True])

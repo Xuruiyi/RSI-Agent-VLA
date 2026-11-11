@@ -338,6 +338,9 @@ def _run_dashboard_task(
                     finish_result = result.finish_result
                     messages += result.messages
                     stats = result.stats
+                    runtime_journal = getattr(toolkit, "runtime_journal", None)
+                    if runtime_journal is not None:
+                        runtime_journal.record_planner_stats(stats)
                     agent_error = result.error
                     if human_interactive_run and toolkit.direct_verdict_requested:
                         finish_result = toolkit.finalize_direct_verdict()
@@ -352,11 +355,16 @@ def _run_dashboard_task(
                 finally:
                     try:
                         state.unbind_toolkit(toolkit)
-                        if robot_spec.finalize_run is not None:
-                            toolkit.cancel_active_and_wait()
-                            environment_success = bool(toolkit.solved())
+                        cancel_fn = getattr(toolkit, "cancel_active_and_wait", None)
+                        if callable(cancel_fn):
+                            cancel_fn()
+                        solved_fn = getattr(toolkit, "solved", None)
+                        if callable(solved_fn):
+                            environment_success = bool(solved_fn())
                             solved = environment_success
-                            environment_metrics = toolkit.evaluation_metrics(
+                        metrics_fn = getattr(toolkit, "evaluation_metrics", None)
+                        if callable(metrics_fn):
+                            environment_metrics = metrics_fn(
                                 success=environment_success
                             )
                     finally:
@@ -415,7 +423,10 @@ def _run_dashboard_task(
             "environment_success": environment_success,
             "stats": stats,
             "messages": _serialize_messages(messages),
+            "runtime": environment_metrics.get("runtime"),
         }
+        if environment_metrics.get("runtime"):
+            record.update(environment_metrics["runtime"]["identity"])
         try:
             with open(transcript_path, "a") as transcript_file:
                 json.dump(record, transcript_file, indent=2, default=str)

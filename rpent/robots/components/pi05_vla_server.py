@@ -98,6 +98,10 @@ PI05_EMBODIMENTS: dict[str, dict] = {
         "openpi": {
             "task": "eval",
             "config_name": "pi05_libero",
+            "discrete_state_input": False,
+            "max_token_len": 200,
+            "model_action_dim": 32,
+            "action_horizon": 10,
             "num_images_in_input": 2,
             "action_chunk": 5,
             "num_steps": 5,
@@ -226,7 +230,59 @@ class Pi05VLAFacade(BaseVLAFacade):
         )
         self._model = get_model(cfg, torch_dtype=None).cuda().eval()
         self._action_chunk = int(cfg.openpi.get("action_chunk", cfg.num_action_chunks))
+        self._record_runtime_model_load(
+            cfg, model_path, norm_stats_path, time.time() - t0
+        )
         logger.info("model ready in %.1fs", time.time() - t0)
+
+    def _record_runtime_model_load(
+        self,
+        cfg: Any,
+        model_path: str,
+        norm_stats_path: str | None,
+        load_seconds: float | None = None,
+    ) -> None:
+        """Record the concrete loaded model and inputs at their owning service."""
+        from pathlib import Path
+
+        from omegaconf import OmegaConf
+
+        from rpent.evaluation import write_json_atomic
+        from rpent.session.runtime import runtime_context
+
+        context = runtime_context()
+        self._rsi_model_evidence = None
+        if context is None:
+            return
+        self._rsi_model_evidence = {
+            "identity": {
+                key: context.get(key)
+                for key in (
+                    "run_id",
+                    "episode_id",
+                    "bundle_id",
+                    "protocol_id",
+                    "profile_ref",
+                    "theta_ref",
+                    "processor_ref",
+                )
+            },
+            "model_path": str(Path(model_path).resolve()),
+            "norm_stats_path": str(Path(norm_stats_path).resolve())
+            if norm_stats_path
+            else None,
+            "model_class": type(self._model).__module__
+            + "."
+            + type(self._model).__name__,
+            "effective_config": OmegaConf.to_container(cfg, resolve=True),
+            "action_chunk": self._action_chunk,
+            "embodiment": self._embodiment,
+            "loaded": True,
+            "model_load_seconds": load_seconds,
+            "prediction_count": 0,
+        }
+        self._rsi_model_evidence_path = Path(context["output_dir"]) / "model_load.json"
+        write_json_atomic(self._rsi_model_evidence_path, self._rsi_model_evidence)
 
     def _register_rpc(self):
         super()._register_rpc()
@@ -257,7 +313,7 @@ class Pi05VLAFacade(BaseVLAFacade):
         mode = (options or {}).get("mode", "eval")
         with torch.no_grad():
             actions, _ = self._model.predict_action_batch(obs, mode=mode)
-        return (
+        decoded = (
             actions.detach().cpu().numpy()
             if (
                 hasattr(actions, "detach")
@@ -266,6 +322,20 @@ class Pi05VLAFacade(BaseVLAFacade):
             )
             else np.asarray(actions)
         ).astype(np.float32)
+        evidence = getattr(self, "_rsi_model_evidence", None)
+        if evidence is not None:
+            from rpent.evaluation import write_json_atomic
+
+            evidence["prediction_count"] += 1
+            evidence["last_action_shape"] = list(decoded.shape)
+            evidence["last_actions_finite"] = bool(np.isfinite(decoded).all())
+            evidence["last_input_shapes"] = {
+                key: list(value.shape)
+                for key, value in obs.items()
+                if hasattr(value, "shape")
+            }
+            write_json_atomic(self._rsi_model_evidence_path, evidence)
+        return decoded
 
 
 # ---------------------------------------------------------------------------

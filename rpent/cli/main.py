@@ -508,6 +508,22 @@ def main() -> int:
         variables=prompt_vars,
     )
 
+    # The RSI launcher selects a frozen startup view; ordinary RPent prompts stay available.
+    if robot_name == "libero":
+        from rpent.session.runtime import runtime_context
+
+        context = runtime_context()
+        if context and context.get("task_input"):
+            from robots.libero.task_input import build_task_input
+            from rpent.evaluation import write_json_atomic
+
+            task_input = build_task_input(
+                context, Path(prompt_vars["memory_dir"]), prompt_vars
+            )
+            system_prompt = task_input["system_prompt"]
+            user_msg = task_input["user_message"]
+            write_json_atomic(output_dir / "task_input.json", task_input)
+
     operator_input = None
     if human_interactive_exploration:
         from rpent.tools.human_in_the_loop import HumanInTheLoopInput
@@ -544,25 +560,13 @@ def main() -> int:
         await_first_prompt = start_first_prompt_resolver(input_queue)
 
     # --- initialise robot runtime --------------------------------------------
-    daemons, runtime_kwargs = robot_spec.init_runtime(
-        args,
-        output_dir,
-        dashboard_events,
-        None,
-    )
+    daemons = []
 
     # --- agent loop --------------------------------------------------------
     t0 = time.time()
     finish_result, messages, agent_error = None, [], None
     stats: dict = {}
     first_user_msg: str | None = user_msg
-    if await_first_prompt is not None:
-        # Block until the opening prompt typed during startup is ready.
-        first_user_msg = await_first_prompt()
-        if first_user_msg is None:
-            logger.info("no task entered; ending session before start.")
-    if human_interactive_exploration:
-        prompt_vars = {**prompt_vars, "initial_user_message": first_user_msg}
     # Exploration may hand off between independent planner contexts.
     sessions = max(1, int(getattr(args, "explore_sessions", 1) or 1))
     if not getattr(args, "explore", False):
@@ -573,6 +577,20 @@ def main() -> int:
     environment_metrics: dict = {}
     memory_manager: MemoryManager | None = None
     try:
+        daemons, runtime_kwargs = robot_spec.init_runtime(
+            args,
+            output_dir,
+            dashboard_events,
+            None,
+        )
+        t0 = time.time()
+        if await_first_prompt is not None:
+            # Block until the opening prompt typed during startup is ready.
+            first_user_msg = await_first_prompt()
+            if first_user_msg is None:
+                logger.info("no task entered; ending session before start.")
+        if human_interactive_exploration:
+            prompt_vars = {**prompt_vars, "initial_user_message": first_user_msg}
         if first_user_msg is not None:
             dashboard_events.emit(RunStartedEvent())
         session_msg = first_user_msg
@@ -646,6 +664,9 @@ def main() -> int:
                 finish_result = result.finish_result
                 messages += result.messages
                 stats = result.stats
+                runtime_journal = getattr(toolkit, "runtime_journal", None)
+                if runtime_journal is not None:
+                    runtime_journal.record_planner_stats(stats)
                 agent_error = result.error
                 if getattr(toolkit, "direct_verdict_requested", False):
                     finish_result = toolkit.finalize_direct_verdict()
@@ -666,16 +687,16 @@ def main() -> int:
                 if operator_input is not None and input_queue is not None:
                     operator_input.bind_verdict(None)
                 try:
-                    if robot_spec.finalize_run is not None:
-                        toolkit.cancel_active_and_wait()
-                        solved_fn = getattr(toolkit, "solved", None)
-                        environment_success = (
-                            bool(solved_fn()) if callable(solved_fn) else None
-                        )
+                    cancel_fn = getattr(toolkit, "cancel_active_and_wait", None)
+                    if callable(cancel_fn):
+                        cancel_fn()
+                    solved_fn = getattr(toolkit, "solved", None)
+                    if callable(solved_fn):
+                        environment_success = bool(solved_fn())
                         solved = bool(environment_success)
-                        environment_metrics = toolkit.evaluation_metrics(
-                            success=environment_success
-                        )
+                    metrics_fn = getattr(toolkit, "evaluation_metrics", None)
+                    if callable(metrics_fn):
+                        environment_metrics = metrics_fn(success=environment_success)
                 finally:
                     toolkit.close()
             if (
@@ -708,8 +729,22 @@ def main() -> int:
             logger.info("recipe: %s", recipe_path)
         else:
             logger.info("recipe: not written (cell unsolved)")
+        cleanup_started = time.monotonic()
         for d in daemons:
             d.stop()
+        if robot_name == "libero" and context:
+            from rpent.evaluation import write_json_atomic
+
+            write_json_atomic(
+                output_dir / "runner_cleanup.json",
+                {
+                    "identity": {
+                        key: context[key]
+                        for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+                    },
+                    "daemon_cleanup_seconds": time.monotonic() - cleanup_started,
+                },
+            )
 
     elapsed = time.time() - t0
 
@@ -723,7 +758,10 @@ def main() -> int:
         "environment_success": environment_success,
         "stats": stats,
         "messages": _serialize_messages(messages),
+        "runtime": environment_metrics.get("runtime"),
     }
+    if environment_metrics.get("runtime"):
+        record.update(environment_metrics["runtime"]["identity"])
     with open(transcript_path, "a") as f:
         json.dump(record, f, indent=2, default=str)
 

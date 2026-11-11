@@ -217,9 +217,21 @@ that call only. Chunk budgets do not specify where to stop inside a chunk.
 View Results
 ------------
 
-The terminal shows server startup, planner conversation, and tool calls. After the run, inspect ``episode.mp4``, ``transcript_*.json``, and ``run.log`` in the output directory; see :ref:`run-output-files` for default paths and step artifacts.
+The terminal shows server startup, planner conversation, and tool calls. After the run, inspect ``result.json``, ``episode.mp4``, ``transcript_*.json``, and ``run.log`` in the output directory; see :ref:`run-output-files` for default paths and step artifacts.
 
 Inspect the final state with ``view_env_state(step=-1)``. Its top-level ``terminated`` value is the native success result; ``finish`` ends planning. See :doc:`../guides/dashboard` for live monitoring.
+
+``result.json`` records the latest episode's native ``terminated`` and
+``truncated`` flags separately from ``planner_finish`` and ``tool_successes``.
+LIBERO sets ``terminated`` from its full-task success predicate; RLinf sets
+``truncated`` at the episode step limit. ``benchmark_success`` is true on
+native success, false on truncation without success, and null while active
+or when native evidence is missing. ``benchmark_status`` distinguishes these
+cases. Tool success can describe a pick heuristic. Extra process labels,
+including release and settling, remain null until independently measured.
+The transcript's ``environment_success`` retains the toolkit's session-level
+``solved()`` verdict; it does not classify an unfinished episode as a benchmark
+failure. Errors are recorded independently of native success.
 
 .. _libero-exploration:
 
@@ -310,6 +322,7 @@ LIBERO tools fall into two groups: physical action tools and read-only tools.
 
 **Physical action tools:**
 
+- ``vla_execute(instruction, max_chunks=...)`` — execute a task or subgoal in a bounded continuous VLA segment (1–24 predictions, five native actions per chunk).
 - ``pi0_pick(prompt, ...)`` — use Pi0.5 to execute a closed-loop grasp.
 - ``pi0_doubled(prompt, ...)`` — use Pi0.5 for a non-pick contact action.
 - ``move_to(xyz, ...)`` — move the end effector to a world-frame position.
@@ -337,7 +350,44 @@ Physical action tools advance the environment and record new state and images.
   recorded step. Step ``-1`` is latest.
 - ``finish(status, summary)`` — end the current run.
 
-These tools do not advance the environment.
+
+- ``back_project_batch(points, step=-1, camera="agentview", resolution="high")``
+  localizes ordered ``[row, col]`` pixels in one read-only call. Each entry keeps
+  its result or error from ``back_project``; no robot actions are grouped.
+
+For explicitly bound RSI runs, tool feedback includes ``runtime_budget`` owner
+snapshots. The launcher saves ``independent_result.json`` and
+``cost_breakdown.json`` after process and transport cleanup, including when the
+Planner does not call ``finish``. Missing evidence and technical interruptions
+remain unknown. The opt-in ``libero-startup-v1`` input provides relevant public
+memory and on-demand guide references at startup.
+
+
+These read-only tools do not advance the environment.
+
+Bounded VLA Execution
+~~~~~~~~~~~~~~~~~~~~~
+
+The opt-in ``bounded-vla-v1`` / ``libero-startup-v2-bounded-vla`` path lets the
+Planner select goals, supervise segment results, continue, switch tools, recover
+or stop. VLA uses the latest observation for each prediction; instructions apply
+only to that call. The chunk allowance is required and never extends the run's
+step, time or cancellation limits. A segment ending with no native success is
+unfinished, rather than a failed stage. ``pi0_pick`` remains grasp-only,
+``pi0_doubled`` remains contact-only, and WAM retains its separate interface.
+
+``view_env_state(image_detail="calibrated")`` embeds calibrated global and wrist
+images; ``image_detail="full"`` also includes the policy-oriented view. Bound v9
+runs select calibrated feedback by default. ``image_frames`` identifies the
+camera, step and high/low resolution for back-projection. VLA inputs, stored raw
+media and evaluation evidence are unchanged.
+
+Native success closes Planner admission automatically. Each internal prediction
+and action retains evidence and costs; the launcher saves results without a
+second Planner audit. Missing usage stays unknown, and cached input remains a
+subset of input. Legacy startup-v1 and hybrid guides remain the fine-grained
+path; their grasp-only division does not govern startup-v2. Offline tests verify
+the interfaces, not real-task capability or savings.
 
 Dashboard
 ---------

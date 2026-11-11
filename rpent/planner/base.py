@@ -235,6 +235,11 @@ def build_planner(
     interactive: bool = False,
 ) -> Planner:
     """Build a planner for the given backend, resolving credentials from env vars."""
+    from rpent.session.runtime import planner_admission
+
+    planner_admission(
+        planner_type, resolve_model(planner_type, model), reasoning_effort
+    )
     # Imports are deferred to avoid a circular import: api_loop / claude_code /
     # codex all import from this module (PlannerResult).
 

@@ -19,12 +19,14 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from rpent.robots.components.action_spec import box_action_spec
 from rpent.robots.components.env_facade_base import BaseEnvFacade
+from rpent.session.runtime import runtime_context
 from rpent.utils.logging import get_logger
 from rpent.utils.serialization import to_numpy_tree
 
@@ -60,6 +62,13 @@ def build_env_cfg(
 ) -> Any:
     from omegaconf import OmegaConf
 
+    context = runtime_context()
+    video_dir = (
+        str(Path(context["output_dir"]) / "native_videos")
+        if context is not None
+        else "/tmp/primitive_videos"
+    )
+
     cfg = OmegaConf.create(
         {
             "env_type": "libero",
@@ -81,7 +90,7 @@ def build_env_cfg(
             "video_cfg": {
                 "save_video": True,
                 "info_on_video": True,
-                "video_base_dir": "/tmp/primitive_videos",
+                "video_base_dir": video_dir,
             },
             "init_params": {
                 "camera_heights": 256,
@@ -130,7 +139,13 @@ def make_env(
         seed=seed,
         max_episode_steps=max_episode_steps,
     )
-    return LiberoEnv(
+    env_class = LiberoEnv
+    context = runtime_context()
+    if context is not None:
+        from robots.libero.runtime_evidence import observed_libero_class
+
+        env_class = observed_libero_class(LiberoEnv, context)
+    return env_class(
         cfg=cfg, num_envs=1, seed_offset=0, total_num_processes=1, worker_info=None
     )
 
@@ -167,6 +182,8 @@ class LiberoEnvFacade(BaseEnvFacade):
                 "env.render_camera": self.render_camera,
                 "env.get_camera_meta": self.get_camera_meta,
                 "env.get_task_language": self.get_task_language,
+                "env.rsi_step": self.rsi_step,
+                "env.rsi_chunk_step": self.rsi_chunk_step,
             }
         )
         self._readonly_methods.add("env.get_task_language")
@@ -241,6 +258,22 @@ class LiberoEnvFacade(BaseEnvFacade):
             trunc,
             to_numpy_tree(info),
         )
+
+    def rsi_step(self, action, *, evidence: dict):
+        """Execute the unchanged native step with explicit client evidence IDs."""
+        from robots.libero.runtime_evidence import rpc_evidence
+
+        with rpc_evidence(self._env._rsi_journal, evidence, 1):
+            return self.step(action)
+
+    def rsi_chunk_step(
+        self, actions, *, evidence: dict, return_all_frames: bool = False
+    ):
+        """Bind each unchanged chunk slot to its client proposal index."""
+        from robots.libero.runtime_evidence import rpc_evidence
+
+        with rpc_evidence(self._env._rsi_journal, evidence, len(actions)):
+            return self.chunk_step(actions, return_all_frames=return_all_frames)
 
     def raw_obs(self) -> dict:
         return to_numpy_tree(self._env.current_raw_obs[self._env_idx])

@@ -20,6 +20,7 @@ LIBERO primitives (``move_to``, ``pi0_pick``, ``release``, ...) on top.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -29,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from robots.libero import tools as libero_tools
 from rpent.dashboard.events import DashboardEventSink
 from rpent.session import EnvState
+from rpent.session.runtime import RuntimeJournal
 from rpent.tools import ToolResult, iter_tools
 from rpent.tools.base import tool
 from rpent.tools.direct_action import direct_action_tool
@@ -43,6 +45,8 @@ logger = get_logger("libero_toolkit")
 
 class LiberoToolkit(Toolkit):
     """Toolkit for the LIBERO robot."""
+
+    runtime_journal: RuntimeJournal | None = None
 
     def __init__(
         self,
@@ -72,9 +76,13 @@ class LiberoToolkit(Toolkit):
         # Bound the resettable attempts owned by this planner session.
         self._attempts_per_session: int = max(0, int(attempts_per_session))
         self._session_attempt: int = 1
+        self.runtime_journal = RuntimeJournal.from_environment()
         self.init_primitives(runtime_kwargs=runtime_kwargs)
         self._register_libero_tools()
-        if policy_kind == "wam":
+        if policy_kind == "wam" or (
+            self.runtime_journal is not None
+            and getattr(self.runtime_journal, "finish_requires_native_success", False)
+        ):
             finish = self._tools["finish"]
             self.add_tool(
                 replace(
@@ -101,12 +109,25 @@ class LiberoToolkit(Toolkit):
     # ------------------------------------------------------------------
     def _register_libero_tools(self) -> None:
         for definition in iter_tools(libero_tools):
-            self.add_tool(
-                definition.with_handler(partial(definition, state=self._state))
-            )
+            if definition.name == "view_env_state" and self.runtime_journal is not None:
+                detail = self.runtime_journal.context.get(
+                    "planner_observation", {}
+                ).get("image_detail", "full")
+                original = definition
+
+                def view_handler(*, _definition=original, _detail=detail, **kwargs):
+                    if kwargs.get("image_detail") is None:
+                        kwargs["image_detail"] = _detail
+                    return _definition(state=self._state, **kwargs)
+
+                self.add_tool(definition.with_handler(view_handler))
+            else:
+                self.add_tool(
+                    definition.with_handler(partial(definition, state=self._state))
+                )
         for definition in iter_tools(self._primitives):
             excluded = (
-                {"pi0_pick", "pi0_doubled"}
+                {"pi0_pick", "pi0_doubled", "vla_execute"}
                 if self._policy_kind == "wam"
                 else {"wam_act"}
             )
@@ -142,7 +163,10 @@ class LiberoToolkit(Toolkit):
 
     def _wam_finish(self, inner: Any, **kwargs: Any) -> ToolResult:
         """Require native task success before accepting a success claim."""
-        if kwargs.get("status") == "success" and not self.solved():
+        if (
+            kwargs.get("status") == "success"
+            and getattr(self._primitives.env, "terminated", None) is not True
+        ):
             return ToolResult(
                 data={
                     "error": "finish refused: success requires native terminated=true",
@@ -199,6 +223,7 @@ class LiberoToolkit(Toolkit):
         result: dict[str, Any],
         elapsed_s: float,
     ) -> ToolResult:
+        media_started = time.monotonic()
         frame_start = self._action_frame_cursor
         self._action_frame_cursor = self._primitives.recorded_frame_count()
         record = libero_tools.dump_state(
@@ -224,7 +249,26 @@ class LiberoToolkit(Toolkit):
                     record.step_idx,
                     e,
                 )
-        out = libero_tools.view_env_state(record.step_idx, state=self._state)
+        detail = (
+            self.runtime_journal.context.get("planner_observation", {}).get(
+                "image_detail", "full"
+            )
+            if self.runtime_journal
+            else "full"
+        )
+        out = libero_tools.view_env_state(
+            record.step_idx, state=self._state, image_detail=detail
+        )
+        if command.get("action") == "vla_execute":
+            out.data["execution_segment"] = result
+        if (
+            record.terminated
+            and not result.get("error")
+            and self.runtime_journal is not None
+            and self.runtime_journal.context.get("execution_version")
+            == "bounded-vla-v1"
+        ):
+            self.runtime_journal.complete_native_success(step=record.step_idx)
         out.data["agent_elapsed_s"] = elapsed_s
         if self._policy_kind == "wam" and (record.terminated or record.truncated):
             status = "success" if record.terminated else "failure"
@@ -234,6 +278,10 @@ class LiberoToolkit(Toolkit):
             )
         if result.get("interrupted"):
             out.data.update(result)
+        if self.runtime_journal is not None:
+            self.runtime_journal.emit(
+                "media_state_end", elapsed_seconds=time.monotonic() - media_started
+            )
         return out
 
     @property
@@ -252,6 +300,7 @@ class LiberoToolkit(Toolkit):
         primitives = libero_tools.LiberoPrimitives(
             check_cancelled=self.raise_if_cancelled,
             policy_kind=self._policy_kind,
+            runtime_journal=self.runtime_journal,
             **runtime_kwargs,
         )
         primitives.reset()
@@ -265,6 +314,7 @@ class LiberoToolkit(Toolkit):
         """Finalize collected data and save the episode video independently."""
         super().close()
         try:
+            media_started = time.monotonic()
             episode = self._primitives.finalize_flywheel()
             if episode is not None:
                 logger.info("flywheel episode finalized: %s", episode)
@@ -279,13 +329,98 @@ class LiberoToolkit(Toolkit):
             # The runner is in the cleanup path; never let a video save
             # abort it.
             logger.warning(f"failed to save episode video: {e}")
+        if self.runtime_journal is not None:
+            self.runtime_journal.emit(
+                "media_cleanup_end", elapsed_seconds=time.monotonic() - media_started
+            )
+            self.runtime_journal.finalize()
 
     def solved(self) -> bool:
         """Return whether this run has completed the task."""
         return self._solved
+
+    def evaluation_metrics(self, *, success: bool | None) -> dict[str, Any]:
+        """Snapshot native episode flags and separately retain tool success claims."""
+        env = self._primitives.env
+        tool_successes = []
+        for record in self._state.records():
+            result = record.result or {}
+            if "success" not in result:
+                continue
+            action = (record.command or {}).get("action")
+            tool_successes.append(
+                {
+                    "step_idx": record.step_idx,
+                    "action": action,
+                    "success": result["success"],
+                    "source": "states.json:steps[].result.success",
+                    "meaning": (
+                        "pick_heuristic_or_native_termination"
+                        if action == "pi0_pick"
+                        else "tool_reported"
+                    ),
+                }
+            )
+        return {
+            "terminated": getattr(env, "terminated", None),
+            "truncated": getattr(env, "truncated", None),
+            "mode": self._mode,
+            "attempt": self._attempt,
+            "tool_successes": tool_successes,
+            "runtime": (
+                {
+                    "identity": self.runtime_journal.identity(),
+                    "action_events_ref": str(self.runtime_journal.events_path),
+                    "costs_ref": str(self.runtime_journal.costs_path),
+                    "costs": self.runtime_journal.costs(),
+                    "environment_service": {
+                        "action_events_ref": str(
+                            self.runtime_journal.output_dir
+                            / "environment_service"
+                            / "action_events.jsonl"
+                        ),
+                        "costs_ref": str(
+                            self.runtime_journal.output_dir
+                            / "environment_service"
+                            / "runtime_costs.json"
+                        ),
+                    },
+                }
+                if getattr(self, "runtime_journal", None) is not None
+                else None
+            ),
+        }
 
     def write_recipe(self, recipe_tag: str) -> str:
         """Write the LIBERO recipe JSONL from the dumped state trace."""
         return libero_tools.write_recipe_from_states(
             self._state, recipe_tag, output_dir=get_output_dir()
         )
+
+    def execute_tool(self, name: str, arguments: dict) -> ToolResult:
+        """Admit tools against the active run's total call budget."""
+        journal = self.runtime_journal
+        if journal is None:
+            return super().execute_tool(name, arguments)
+        started = time.monotonic()
+        status, admitted = "failed", False
+        try:
+            journal.admit_tool(name)
+            admitted = True
+            result = super().execute_tool(name, arguments)
+            status = (
+                "interrupted"
+                if result.data.get("interrupted")
+                else "failed"
+                if result.data.get("error")
+                else "completed"
+            )
+            result.data["runtime_budget"] = journal.budget_snapshot()
+            return result
+        finally:
+            journal.emit(
+                "tool_end",
+                tool=name,
+                status=status if admitted else "rejected",
+                elapsed_seconds=time.monotonic() - started,
+            )
