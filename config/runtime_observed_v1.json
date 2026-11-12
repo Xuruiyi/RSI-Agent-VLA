@@ -1,0 +1,136 @@
+{
+  "python": "3.11.13",
+  "executable": "/home/xzh/RSI-Agent-VLA/RPent/.venv/bin/python",
+  "packages": {
+    "torch": {
+      "version": "2.7.1+cu126",
+      "source": null
+    },
+    "torchvision": {
+      "version": "0.22.1+cu126",
+      "source": null
+    },
+    "rpent": {
+      "version": "0.1.0",
+      "source": {
+        "url": "file:///home/xzh/RSI-Agent-VLA/RPent",
+        "dir_info": {
+          "editable": true
+        }
+      }
+    },
+    "rlinf": {
+      "version": "0.4.0",
+      "source": {
+        "url": "https://github.com/RLinf/RLinf.git",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "2348ece3df113874671478be1360ae3115b346e3",
+          "requested_revision": "release/v0.4"
+        }
+      }
+    },
+    "rpent-openpi": {
+      "version": "0.2.2",
+      "source": {
+        "url": "https://github.com/RLinf/openpi.git",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "a560f4dd8205b8423ecd4c8a0fabb5f54140b8a0",
+          "requested_revision": "rpent"
+        }
+      }
+    },
+    "rpent-libero": {
+      "version": "0.2.0",
+      "source": {
+        "url": "https://github.com/RLinf/LIBERO.git",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "a8323074d93a09e32bd898630a70531b1f51bc77",
+          "requested_revision": "rpent"
+        }
+      }
+    },
+    "rpent-liberopro": {
+      "version": "0.2.0",
+      "source": {
+        "url": "https://github.com/RLinf/LIBERO-PRO.git",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "d1e11fb181b8544487d27742c0caa3a4d46452ad",
+          "requested_revision": "rpent"
+        }
+      }
+    },
+    "sam3": {
+      "version": "0.1.0",
+      "source": {
+        "url": "https://github.com/RLinf/sam3.git",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "c1f6b1e83967c912f675d8975d437ccdc41e17d8",
+          "requested_revision": "main"
+        }
+      }
+    },
+    "openai-codex": {
+      "version": "0.167.0",
+      "source": null
+    },
+    "sentencepiece": {
+      "version": "0.2.3",
+      "source": null
+    },
+    "safetensors": {
+      "version": "0.9.0rc1",
+      "source": null
+    },
+    "omegaconf": {
+      "version": "2.4.1rc2",
+      "source": null
+    },
+    "transformers": {
+      "version": "4.57.6",
+      "source": null
+    },
+    "mujoco": {
+      "version": "3.3.0",
+      "source": null
+    },
+    "robosuite": {
+      "version": "1.5.2",
+      "source": null
+    },
+    "lerobot": {
+      "version": "0.3.3",
+      "source": null
+    }
+  },
+  "module_origins": {
+    "rpent": "/home/xzh/RSI-Agent-VLA/RPent/rpent/__init__.py",
+    "rlinf": "/home/xzh/RSI-Agent-VLA/RPent/.venv/lib/python3.11/site-packages/rlinf/__init__.py",
+    "openpi": "/home/xzh/RSI-Agent-VLA/RPent/.venv/lib/python3.11/site-packages/openpi/__init__.py",
+    "liberopro": "/home/xzh/RSI-Agent-VLA/RPent/.venv/lib/python3.11/site-packages/liberopro/__init__.py",
+    "sam3": "/home/xzh/RSI-Agent-VLA/RPent/.venv/lib/python3.11/site-packages/sam3/__init__.py"
+  },
+  "libero_model_preset": {
+    "num_action_chunks": 5,
+    "action_dim": 7,
+    "use_proprio": true,
+    "num_steps": 5,
+    "add_value_head": false,
+    "openpi": {
+      "task": "eval",
+      "config_name": "pi05_libero",
+      "num_images_in_input": 2,
+      "action_chunk": 5,
+      "num_steps": 5,
+      "action_env_dim": 7,
+      "add_value_head": false
+    }
+  },
+  "rpent_head": "c41c0e6c3dc44e3347070ac1361bc2c288901873",
+  "rpent_status": "",
+  "evidence_kind": "offline_metadata_and_static_source"
+}

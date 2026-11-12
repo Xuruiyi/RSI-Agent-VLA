@@ -1,0 +1,93 @@
+{
+  "view_env_state": {
+    "name": "view_env_state",
+    "description": "Read one recorded state and its observation artifacts. Step -1 selects the latest entry. Embeds policy, agentview, and wrist images when available. Use the calibration-frame images for pixel back-projection; JSON state alone is not enough. Use agentview for global tabletop layout and object locations; use wrist for close-range details near the gripper, occlusions, and container/cabinet interiors.",
+    "input_schema": {
+      "properties": {
+        "step": {
+          "default": -1,
+          "description": "Step number; 0 = initial, -1 = latest.",
+          "type": "integer"
+        },
+        "image_detail": {
+          "anyOf": [
+            {
+              "enum": [
+                "full",
+                "calibrated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "full includes policy view; calibrated omits it and keeps calibrated global/wrist views. Original media remain on disk."
+        }
+      },
+      "type": "object"
+    }
+  },
+  "back_project_batch": {
+    "name": "back_project_batch",
+    "description": "Localize several pixels in one read-only call using back_project.",
+    "input_schema": {
+      "properties": {
+        "points": {
+          "description": "Ordered [row, col] pixels from the same camera image.",
+          "items": {},
+          "type": "array"
+        },
+        "step": {
+          "default": -1,
+          "description": "Observation step; -1 selects the latest once for the whole batch.",
+          "type": "integer"
+        },
+        "camera": {
+          "description": "Camera used to select all pixels.",
+          "enum": [
+            "agentview",
+            "wrist"
+          ],
+          "type": "string"
+        },
+        "resolution": {
+          "description": "Image resolution used to select all pixels.",
+          "enum": [
+            "high",
+            "low"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "type": "object"
+    }
+  },
+  "vla_execute": {
+    "name": "vla_execute",
+    "description": "Execute a task or subgoal continuously from latest observations within an explicit chunk allowance. Each prediction uses the existing VLA processor and five-action chunk. Planner chooses goals, supervises, switches tools or recovers between segments; no per-chunk Planner call is required. Allowance exhaustion means unfinished, not stage failure. Only native termination establishes task success.",
+    "input_schema": {
+      "properties": {
+        "instruction": {
+          "description": "Explicit task or subgoal text, local to this invocation.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "max_chunks": {
+          "description": "Required prediction allowance, from 1 to 24.",
+          "maximum": 24,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instruction",
+        "max_chunks"
+      ],
+      "type": "object"
+    }
+  }
+}

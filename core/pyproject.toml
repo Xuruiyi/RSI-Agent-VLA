@@ -1,0 +1,6 @@
+[project]
+name = "rsi-vla-core"
+version = "0.4.0"
+description = "Offline research evidence and release core"
+requires-python = ">=3.10"
+dependencies = []

@@ -1,0 +1,372 @@
+RoboDojo
+========
+
+Control bimanual tabletop scenes through RPent tools in RoboDojo. The simulator
+uses Isaac Sim / IsaacLab with an ARX-X5 dual-arm platform.
+
+.. note::
+
+   Scripted tools use native cuRobo pose planning and joint-target execution.
+   The planner's default obstacle model contains a simplified table, not all
+   objects or the opposite arm. Planning and path subsampling do not guarantee
+   collision-free execution. Component and bounded execution checks do not
+   establish a benchmark success rate.
+
+   ``pi0_pick``, ``stabilize``, and ``place_in_bin`` are not registered. Normal
+   startup loads Env and SAM3; no action-policy checkpoint is needed.
+   Flash replay remains unavailable.
+
+Overview
+--------
+
+.. grid:: 2 4 4 4
+   :gutter: 2
+
+   .. grid-item-card:: Action Models
+
+      Scripted pose and gripper primitives
+
+   .. grid-item-card:: Planners
+
+      ``api``, ``claude_code``, ``codex``
+
+   .. grid-item-card:: Tasks
+
+      Bottle disposal, pen-holder filling, bowl stacking, and other tabletop tasks.
+
+   .. grid-item-card:: Hardware
+
+      Linux, NVIDIA GPU; Python 3.11; Isaac Sim 5.1.
+
+Tasks
+~~~~~
+
+The `RoboDojo simulation task catalog <https://robodojo-benchmark.com/doc/sim-tasks/>`_
+groups 42 benchmark tasks into five capability categories:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Category
+     - Tasks
+     - Focus
+   * - Generalization
+     - 12
+     - Varied objects and layouts, including random variants.
+   * - Memory
+     - 6
+     - State tracking and sequence recall.
+   * - Precision
+     - 8
+     - Manipulation with tight spatial constraints.
+   * - Long-Horizon
+     - 8
+     - Multi-step tasks with several subgoals.
+   * - Open
+     - 8
+     - Open-ended or language- and image-conditioned tasks.
+
+Observation and Action
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+
+   * - Item
+     - Description
+   * - Observation
+     - Head and left/right wrist RGB-D images, camera calibration, and joint states, end-effector poses, and gripper states for both arms.
+   * - Action
+     - ``move_to``, ``rotate_wrist``, ``set_gripper``, and ``release``. ``finish`` cannot override the native task verdict.
+   * - Reward / success
+     - RoboDojo's native environment determines task success, recorded in the ``success`` field of ``result.json``.
+   * - Task prompt
+     - The current scene's RoboDojo task description, read through ``view_env_state``.
+
+Installation and Resources
+--------------------------
+
+For NVIDIA driver recommendations, see the `Isaac Sim 5.1 system requirements
+<https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html>`_.
+The host also needs the CUDA toolkit/NVCC and a compiler toolchain to build
+cuRobo. From the RPent root, create an environment and install the dependencies:
+
+.. code-block:: bash
+
+   uv venv --python 3.11 .venv-robodojo
+   source .venv-robodojo/bin/activate
+   uv pip install -e ".[robodojo-sim,sam3]" --extra-index-url https://pypi.nvidia.com \
+     --override requirements/robodojo-override.txt
+
+.. note::
+
+   Blackwell GPUs need the CUDA 12.8 build of PyTorch. The pinned PyTorch 2.7.0
+   also has a CUDA 12.6 build, but that build does not support Blackwell. On
+   these GPUs, use the following command for both initial installation and
+   reinstallation; ``--torch-backend=cu128`` selects the CUDA 12.8 build:
+
+   .. code-block:: bash
+
+      uv pip install -e ".[robodojo-sim,sam3]" --extra-index-url https://pypi.nvidia.com \
+        --override requirements/robodojo-override.txt \
+        --torch-backend=cu128
+
+   If ``torch==2.7.0+cu126`` is already installed, uv considers it compatible
+   with the version requirement and keeps it. Append
+   ``--reinstall-package torch --reinstall-package torchvision`` to the command
+   above to replace it with the CUDA 12.8 build.
+
+The pinned IsaacLab revision needs an editable installation to locate its
+extension configuration. Clone it into a writable directory and install it
+in the same environment:
+
+.. code-block:: bash
+
+   git clone --no-checkout https://github.com/yuechen0614/IsaacLab.git /path/to/IsaacLab
+   git -C /path/to/IsaacLab checkout afca7b09d60d8beb9c1cb28b43066499940b969b
+   uv pip install --no-deps \
+     -e /path/to/IsaacLab/source/isaaclab \
+     -e /path/to/IsaacLab/source/isaaclab_assets \
+     -e /path/to/IsaacLab/source/isaaclab_tasks
+
+Keep this checkout after installation; the runtime still uses it.
+
+Download Simulator Resources
+----------------------------
+
+Download the robot, object, material, and layout files from the
+`RoboDojo dataset <https://huggingface.co/datasets/RoboDojo-Benchmark/RoboDojo>`_
+and set the resource directory:
+
+.. code-block:: bash
+
+   hf download RoboDojo-Benchmark/RoboDojo --repo-type dataset \
+     --include 'Assets/**' --local-dir /data/robodojo
+   export ROBODOJO_ASSETS_ROOT=/data/robodojo
+
+The download should contain ``Assets/Robots``, ``Assets/Object``,
+``Assets/Material``, and ``Assets/Eval_Layout``.
+
+Generate a ``*.yml`` configuration beside each ``*_tmp.yml`` template under
+``Assets/Robots``, substituting absolute local resource paths. The simulator
+reads ``Assets/Robots/x5/curobo.yml`` for x5:
+
+.. code-block:: bash
+
+   python - <<'PY'
+   import os
+   import runpy
+   from robodojo_runtime import source_root
+
+   script = source_root() / "utils/update_embodiment_config_path.py"
+   os.chdir(os.environ["ROBODOJO_ASSETS_ROOT"])
+   runpy.run_path(str(script), run_name="__main__")
+   PY
+   test -s "$ROBODOJO_ASSETS_ROOT/Assets/Robots/x5/curobo.yml"
+
+Run this once after the initial download; subsequent task runs do not need it.
+Moving the resource directory invalidates the paths saved in these configurations,
+so run the command again afterward. Regeneration overwrites existing ``*.yml``
+configurations.
+
+Some NVIDIA resources referenced by the scene load online by default.
+For offline use or repeated resource-loading failures, see
+:ref:`robodojo-local-nvidia-assets` at the end of this page.
+
+SAM3 Configuration
+------------------
+
+SAM3 provides object segmentation. Request access on the
+`facebook/sam3 model page <https://huggingface.co/facebook/sam3>`_, then
+download ``sam3.pt`` and set its path:
+
+.. code-block:: bash
+
+   hf download facebook/sam3 sam3.pt --local-dir /data/sam3
+   export SAM3_CHECKPOINT_PATH=/data/sam3/sam3.pt
+
+Alternatively, download the same file from
+`ModelScope <https://modelscope.cn/models/facebook/sam3>`_ and set
+``SAM3_CHECKPOINT_PATH`` to the local file.
+
+Run a Task
+----------
+
+Follow :doc:`../guides/configure_planner` to choose and configure the planner
+and model you want to use. The following Codex example checks connectivity in
+the terminal that will run the task:
+
+.. code-block:: bash
+
+   rpent-check-llm --planner codex --model <planner-model> --json
+
+Replace ``<planner-model>`` with the selected model. After configuring SAM3, run the bottle-disposal task. This command can move both arms:
+
+.. code-block:: bash
+
+   # Workaround: RPent currently prioritizes a sibling rlinf checkout, which can shadow the installed RoboDojo integration.
+   # Point to the active environment's site-packages so child services use its installed RLinf.
+   # Remove this setting once RPent's default import-path selection is fixed.
+   export RPENT_RLINF_ROOT="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+
+   export ROBODOJO_PLACEMENT_SETTLE_STEPS=1000  # Recommended: let objects settle; the default is 20 steps
+   export OMNI_KIT_ACCEPT_EULA=YES  # Recommended for the first non-interactive start; omit if the Kit license is already accepted
+   # Isaac Sim takes tens of seconds to start; the first run also compiles shaders
+   rpent --robot robodojo --task put_bottles_into_dustbin --layout 0 \
+     --planner codex --model <planner-model> --reasoning-effort medium \
+     --max-turns 40 --planner-timeout-s 1500 \
+     --output-dir /path/to/run-output
+
+View Results
+------------
+
+The terminal shows service startup, planner output, and tool calls. After the
+run, inspect these files in the directory selected by ``--output-dir``:
+
+- ``result.json``: the environment's task verdict and run error status.
+- ``states.json``: commands, execution results and synchronized observation records.
+- Per-step RGB, metric depth, calibration and world-xyz artifacts for available cameras.
+- ``videos/``: head, left-wrist, and right-wrist camera videos.
+- ``robodojo_env_server.log`` and ``sam3_server.log``:
+  locally owned service startup and error logs.
+- ``run.log`` and ``transcript_*.json``: main-process logs, planner conversations,
+  and errors.
+
+Check ``environment_result_available=true`` and
+``agent_error_present=false`` first, then inspect whether ``success`` is
+``true``. A clean service exit or a planner call to ``finish`` alone does not
+establish task success.
+
+``score`` records the native task-progress score on a 0–100 scale. Successful
+episodes receive 100; failed episodes use the native partial score, or 0 for
+tasks without partial scoring. The runner collects it after tools finish and
+before the environment shuts down, without adding it to planner feedback.
+``score_available=false`` and ``score=null`` indicate that no score was
+collected; a read failure also records ``score_error``. Score is unavailable
+in ``eval-fair`` mode, which blocks access to evaluator results.
+
+Without ``--output-dir``, results go to
+``logs/<timestamp>_robodojo_<task>_s<seed>_l<layout>/``. Use different directories for
+concurrent runs. For live monitoring, see :doc:`../guides/dashboard`.
+
+Common Options
+--------------
+
+RPent starts the simulator and SAM3 services in the current Python environment
+by default. Specify ``--sim-python`` when the simulator uses a separate
+environment. Legacy Pi0.5 diagnostic helpers remain in source, but are not
+started by the CLI or exposed as planner tools.
+
+- ``--task``, ``--seed`` (default 0) and ``--layout`` select a fixed scene.
+  The seed selects the official layout group; layout selects an index within it. ``--random``
+  ignores ``--layout`` and samples a new random scene on each reset.
+- ``--env-cuda-device``, ``--am-cuda-device`` and ``--sam3-cuda-device`` select
+  GPUs independently for the corresponding local services. If omitted,
+  services inherit ``CUDA_VISIBLE_DEVICES``.
+- ``--env-endpoint`` and ``--sam3-endpoint`` connect to existing services.
+- ``--source-root`` selects a local RoboDojo checkout instead of the packaged code.
+
+Child services inherit the current shell environment. The CLI does not load
+``config/runtime.env`` automatically. Run ``rpent --robot robodojo --help``
+for the full option list.
+
+Tools
+-----
+
+The planner cannot reset an episode; exploration and Flash replay are unavailable.
+
+Initial observations and motion feedback include ``episode_status.step``
+(native actions used), ``step_limit`` (total budget), and ``remaining_steps``.
+These counters describe the saved observation; the top-level ``step`` is its
+record index. Reading historical observations does not consume action steps.
+
+``view_env_state`` reads saved images and state; ``render`` captures a new
+observation. ``sample_world_xyz(view, pixels, step=None, neighborhood=1)``
+samples [row,col] pixels, with a default 3-by-3 neighborhood. ``query_world_map``
+samples a half-open [r0,c0,r1,c1] image region (default limit 256 points).
+Use views ``head``, ``left_wrist`` or ``right_wrist`` from the source RGB step.
+Both queries use saved same-frame depth, not a live refresh. Invalid depths
+are excluded. These are visible surface coordinates, not object centres.
+
+``segment`` and ``back_project`` also accept ``step``. Segmentation returns
+``centroid_rc`` and a foreground ``point_rc``; the centroid can lie outside a
+concave mask. Prefer ``point_rc`` and the returned ``step_idx`` for back-projection.
+These two tools retain camera names ``cam_head``, ``cam_left_wrist`` and
+``cam_right_wrist``.
+
+Describe visible colour, shape and location in ``segment(text_prompt=...)``.
+It returns a red-mask overlay; inspect it before using the point, because a
+high score does not establish object identity. If segmentation fails, revise
+the description or manually query a visible pixel in the same saved frame.
+The overlay and geometry are saved with that frame. Unlike LIBERO's interface,
+this tool does not accept point prompts or return mask-median world coordinates;
+use ``back_project`` for the selected foreground pixel.
+
+``move_to(arm, xyz, quat=None, gripper=None, substeps=25)`` uses world metres
+and wxyz orientation. Omitted orientation and gripper targets are held.
+``substeps`` caps sampled waypoints: 0 keeps the full path, 1 keeps only its
+final waypoint. It is not a speed or physics-step count. ``rotate_wrist``
+rotates about world Z in degrees. ``final_dist_m`` is measured position error,
+not an arrival guarantee. Check ``completed``, ``executed_steps`` and
+``stop_reason``; a timed-out mutation may have executed and is not retried.
+
+``set_gripper(arm, val, steps=10)`` uses 0=closed and 1=open. ``release``
+defaults to 1. Intermediate values are continuous targets, not guaranteed
+physical widths. Feedback comes from measured joints, not the command field.
+Only a physically out-of-range measurement is saturated when selecting the
+interpolation start; invalid user inputs are rejected. Other controller
+targets are retained. Each action target undergoes native interpolation.
+
+.. _robodojo-local-nvidia-assets:
+
+Prepare Local NVIDIA Scene Assets (Optional)
+--------------------------------------------
+
+Download NVIDIA scene assets in advance if either of these applies:
+
+- You need to run the simulator on a machine without network access.
+- NVIDIA resource URLs are unreliable and the logs show repeated download failures.
+
+RoboDojo scenes also reference NVIDIA 3D models, materials, and textures.
+These files are separate from the RoboDojo resources downloaded above and
+load over the network by default. Skip this section if scenes load normally;
+you do not need a local asset pack or ``ROBODOJO_USD_ASSET_PREFIX``.
+
+The steps below prepare local resources for ``Assets/Isaac/5.0`` paths.
+The three parts of the complete asset pack total about 150 GB; this is not
+the download size for a single RoboDojo scene. Allow extra space for merging
+and extraction. For an offline machine, download the parts on a connected
+machine first, then copy them to ``/data/nvidia``.
+
+.. code-block:: bash
+
+   mkdir -p /data/nvidia
+
+   # Download all three parts; interrupted downloads can resume
+   wget -c -P /data/nvidia \
+     https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-5.0.0.zip.001 \
+     https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-5.0.0.zip.002 \
+     https://download.isaacsim.omniverse.nvidia.com/isaac-sim-assets-complete-5.0.0.zip.003
+
+   # Merge and extract, preserving the Assets/Isaac/5.0 directory structure
+   cat /data/nvidia/isaac-sim-assets-complete-5.0.0.zip.001 \
+       /data/nvidia/isaac-sim-assets-complete-5.0.0.zip.002 \
+       /data/nvidia/isaac-sim-assets-complete-5.0.0.zip.003 \
+     > /data/nvidia/isaac-sim-assets-complete-5.0.0.zip
+   unzip /data/nvidia/isaac-sim-assets-complete-5.0.0.zip -d /data/nvidia
+
+   test -d /data/nvidia/Assets/Isaac/5.0/Isaac
+   test -d /data/nvidia/Assets/Isaac/5.0/NVIDIA
+
+Set this variable in the terminal that will run RPent, then run the task:
+
+.. code-block:: bash
+
+   export ROBODOJO_USD_ASSET_PREFIX=/data/nvidia
+
+This changes the matching RoboDojo 5.0 resource URLs to local paths. It does
+not make every Isaac Sim resource available offline. If other online resources
+still fail to load, such as ``Assets/Isaac/5.1`` paths, prepare assets for that
+version and configure local loading separately. See the
+`NVIDIA local asset instructions
+<https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/install_faq.html#isaac-sim-setup-assets-content-pack>`_.
