@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One supervised medium research request, limited to legal development evidence."""
+"""One supervised high research request, limited to legal development evidence."""
 import argparse
 import json
 import os
@@ -14,6 +14,8 @@ def child(output):
     import openai_codex
     from rpent.planner.codex import ReasoningEffort, build_codex_config
     prepared=json.loads((output/'request.json').read_text())
+    if prepared['reasoning_effort'] != 'high':
+        raise PermissionError('new Research dispatch requires high; historical responses are parse-only')
     schema=json.loads((output/'response-schema.json').read_text())
     prompt=('Review only the supplied development evidence. Propose one bounded finish-reserve hint or defer. '
         'No tools are available. Do not inspect release or sealed data. The native finish guard lacks its '
@@ -27,7 +29,7 @@ def child(output):
     with openai_codex.Codex(config=config) as client:
         thread=client.thread_start(model='gpt-6.1-sol',approval_mode=openai_codex.ApprovalMode.deny_all,
                                    sandbox=openai_codex.Sandbox.read_only)
-        result=thread.turn(prompt,model='gpt-6.1-sol',effort=ReasoningEffort.medium,output_schema=schema).run()
+        result=thread.turn(prompt,model='gpt-6.1-sol',effort=ReasoningEffort.high,output_schema=schema).run()
     (output/'sdk-result.json').write_text(json.dumps({'status':getattr(result.status,'value',str(result.status)),
         'final_response':result.final_response},ensure_ascii=False,indent=2)+'\n')
 
@@ -57,10 +59,14 @@ def main():
         'environment_steps':2000,'gpu_device_seconds_envelope':900,'artifact_bytes':1084227584})
     tools=ResearchTools(store,job,protocol,domain_policy={'domain':'libero_tabletop',
         'allowed_goal_kinds':[],'policy_ref':str(args.protocol.resolve())})
-    adapter=ResearchLLMAdapter(model='gpt-6.1-sol',reasoning_effort='medium')
+    adapter=ResearchLLMAdapter()
     request_id='research-v6-finish-reserve-001'
-    request=adapter.prepare_request(tools,request_id=request_id,result_ids=[args.result_id],
-                                    max_input_tokens=64000,max_output_tokens=4000)
+    if args.reconcile:
+        request=json.loads((args.output/'request.json').read_text())
+        adapter=ResearchLLMAdapter(model=request['model'],reasoning_effort=request['reasoning_effort'])
+    else:
+        request=adapter.prepare_request(tools,request_id=request_id,result_ids=[args.result_id],
+                                        max_input_tokens=64000,max_output_tokens=4000)
     request['finish_budget_observations']=tools.inspect_finish_budget_opportunity([args.result_id])
     request['native_finish_observations']=tools.inspect_native_finish_opportunity([args.result_id])
     if not args.execute and not args.reconcile:
@@ -76,7 +82,7 @@ def main():
     context={'run_id':output.name,'episode_id':'research-only','bundle_id':tools.base.bundle_id,
         'protocol_id':protocol['protocol_id'],'output_dir':str(output),'gpu_count':0,
         'dynamic_authorized':True,'authorization_ref':str(authority),
-        'planner':{'model':'gpt-6.1-sol','reasoning_effort':'medium'},
+        'planner':{'model':'gpt-6.1-sol','reasoning_effort':request['reasoning_effort']},
         'limits':{'model_requests':1,'wall_seconds':295,'storage_bytes':10485760}}
     if args.reconcile:
         if json.loads((output/'runtime_context.json').read_text())!=context:

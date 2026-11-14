@@ -24,7 +24,7 @@ def main():
     parser.add_argument("--protocol", required=True, type=Path)
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--request", required=True)
-    parser.add_argument("--result-id", action="append", required=True)
+    parser.add_argument("--result-id", action="append", default=[])
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--response", type=Path)
     parser.add_argument("--synthetic", action="store_true")
@@ -43,7 +43,7 @@ def main():
         json.loads(args.protocol.read_text()),
         domain_policy=json.loads(args.policy.read_text()),
     )
-    adapter = BoundedResearchAdapter(model="gpt-6.1-sol", reasoning_effort="medium")
+    adapter = BoundedResearchAdapter()
     request = adapter.prepare_request(
         tools,
         request_id=args.request,
@@ -53,7 +53,7 @@ def main():
     )
     atomic_json(args.output / "request.json", request)
     atomic_json(
-        args.output / "response-schema.json", adapter.response_schema(args.request)
+        args.output / "response-schema.json", adapter.response_schema(args.request, tools=tools)
     )
     if args.response:
         if not args.cost_limit:

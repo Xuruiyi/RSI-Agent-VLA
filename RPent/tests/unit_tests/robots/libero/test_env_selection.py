@@ -40,7 +40,12 @@ def backend(monkeypatch):
         module.__path__ = []
         monkeypatch.setitem(sys.modules, name, module)
     module = types.ModuleType("rlinf.envs.sim.libero.libero_env")
-    module.LiberoEnv = constructor
+
+    class FakeLiberoEnv:
+        def __new__(cls, **kwargs):
+            return constructor(**kwargs)
+
+    module.LiberoEnv = FakeLiberoEnv
     monkeypatch.setitem(sys.modules, module.__name__, module)
     utils = types.ModuleType("rlinf.envs.sim.libero.utils")
     utils.benchmark = SimpleNamespace(get_benchmark=lambda _: lambda: suite)

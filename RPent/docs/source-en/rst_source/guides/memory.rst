@@ -10,7 +10,7 @@ Evaluation reads memory without updating it. Exploration can reset and retry. Fo
 Use Published Memory
 --------------------
 
-Evaluation defaults to ``--memory-profile hf`` and downloads memory from the public
+VLA evaluation in LIBERO, RoboCasa, and RoboTwin defaults to ``--memory-profile hf`` and downloads memory from the public
 `RLinf/RPent-memory dataset <https://huggingface.co/datasets/RLinf/RPent-memory>`_.
 LIBERO selects one version with ``--memory-version auto`` (the default):
 
@@ -226,5 +226,5 @@ Other Environments
 ------------------
 
 - :doc:`../simulators/robocasa` and :doc:`../simulators/robotwin` support exploration; see their pages for task arguments, resets, and memory scope.
-- :doc:`../real_world_robots/dual_franka` exploration requires an operator to reset the scene and judge results. Automatic merging is disabled by default. Complete deployment and motion checks first.
+- :doc:`../real_world_robots/dual_franka` and :doc:`../real_world_robots/yam` require an operator to restore scenes and judge exploration results. Memory merging is enabled by default; use ``--no-auto-merge-memory`` for manual review. Complete deployment and motion checks first.
 - :doc:`../real_world_robots/franka` does not currently support exploration.

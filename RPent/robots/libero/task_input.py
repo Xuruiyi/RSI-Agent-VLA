@@ -181,6 +181,21 @@ def build_task_input(
         + "Skills: pi0_pick (grasp), move_to/move_pose (motion), release, set_gripper, "
         "rotate_wrist/rotate_pitch, pi0_doubled (contact); use their exposed schemas."
     )
+    task_hint = context.get("planner_task_hint", "")
+    if task_hint:
+        user += "\n\nAdditional Planner instruction from the runtime rule:\n" + task_hint
+    skill_start = context.get("relation_skill_start")
+    if skill_start:
+        argument = "prompt" if skill_start["tool"] in {"pi0_pick", "pi0_doubled"} else "instruction"
+        user += (
+            "\n\nRegistered same-goal skill comparison: after the initial observation, "
+            "make one registered subgoal call using " + skill_start["tool"] + " with "
+            + json.dumps({argument: skill_start["instruction"],
+                          "max_chunks": skill_start["max_chunks"]})
+            + ". This consumes the existing allowance. Then inspect feedback and "
+            "continue the task, recover or stop under the original rules. "
+            "The skill call does not establish holding or native task success."
+        )
     return {
         "schema": "libero-task-input-v2" if v2 else "libero-task-input-v1",
         "version": options["version"],

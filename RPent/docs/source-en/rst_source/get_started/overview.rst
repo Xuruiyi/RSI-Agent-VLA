@@ -1,29 +1,22 @@
 Introduction to RPent
 =====================
 
-**RPent (Recursive Physical Agent)** is an open framework for building embodied
-agents that continuously evolve through recursive interaction with the physical world.
-Rather than prescribing a single foundation model, RPent provides a recursive agent
-framework that harnesses heterogeneous intelligence, including perception, reasoning,
-memory, execution, and self-evolution, into a unified physical agent.
-Through continuous interaction, reflection, and adaptation, RPent enables physical agents
-to acquire new capabilities and evolve beyond their initial design.
+**RPent (Recursive Physical Agent)** is an open framework for embodied agents.
+It connects a planner to perception, action models, scripted tools, and task
+memory. The planner observes the environment, chooses tools, and uses their
+results to decide the next action. Exploration records experience for later runs.
 
-The name Pent is inspired by the Pentagram, whose five points symbolize the integration
-of multimodal intelligence into a unified embodied agent. At its center, the infinity
-symbol (∞) represents the endless recursive cycle of perception, reasoning,
-execution, and self-evolution, through which intelligence continuously expands into the physical world.
+The five points of the Pentagram represent these combined capabilities; the
+central infinity symbol represents the recurring observation and action loop.
 
 .. image:: https://raw.githubusercontent.com/RLinf/misc/main/pic/rpent_framework.png
    :alt: RPent planning, perception, memory, and execution architecture
    :width: 100%
 
-RPent is built upon three core design principles: **service-oriented, standardized, and composable**.
-RPent enables capabilities to be deployed as reusable services,
-connected through unified interfaces, and flexibly composed into diverse physical agents.
-Together, these principles allow RPent to move beyond traditional robot control frameworks
-and establish an agentic infrastructure for the physical world, where intelligence
-is not only deployed, but continuously built, expanded, and evolved.
+RPent uses **service-oriented, standardized, and composable** components.
+Models and environments run as reusable services with shared interfaces, so
+planners, tools, and robots can be extended independently. See
+:doc:`../development/architecture` for the execution flow and module boundaries.
 
 Leaderboard
 -----------
@@ -55,18 +48,18 @@ Choose a Platform
    * - :doc:`RoboTwin <../simulators/robotwin>`
      - LingBot-VLA, dual-arm simulation tasks, and C2R reproduction.
    * - :doc:`RoboDojo <../simulators/robodojo>`
-     - Dual-arm ARX-X5 manipulation in Isaac Sim, with the RLinf Pi0.5 policy.
+     - Dual-arm ARX-X5 manipulation in Isaac Sim, with cuRobo motion planning and SAM3.
    * - :doc:`Single-Arm Franka <../real_world_robots/franka>`
      - Hardware preparation, calibration, motion checks, and operation.
    * - :doc:`Dual-Arm Franka <../real_world_robots/dual_franka>`
      - Two-node deployment, operation, and exploration with an operator.
    * - :doc:`YAM <../real_world_robots/yam>`
-     - Task demo available; installation and usage documentation is coming soon.
+     - Two-machine deployment, operator controls, task execution, and exploration.
    * - :doc:`SO-101 <../real_world_robots/so101>`
      - Coming soon.
 
-Choose ``api``, ``claude_code``, or ``codex`` for online planning. LIBERO also supports :doc:`Flash Mode <../guides/flash>` for executing stored plans. See :doc:`../guides/configure_planner` for model-service configuration.
+Choose ``api``, ``claude_code``, or ``codex`` for online planning. LIBERO supports :doc:`Flash Mode <../guides/flash>`; single- and dual-arm Franka support :ref:`reviewed Flash task cards <franka-flash>`. See :doc:`../guides/configure_planner` for model-service configuration.
 
 Start with :doc:`quickstart`. See :doc:`../leaderboard/index` for reported results and resource costs, and :doc:`../resources/harnessvla` for the research background.
 
-DreamZero, Cosmos Policy, and RoboDojo are also listed in the project roadmap; their usage documentation is pending.
+Cosmos Policy, Cosmos3, and Fast-WAM deployment and supported platform pairs are documented in :doc:`../development/add_action_model`. DreamZero remains on the roadmap.

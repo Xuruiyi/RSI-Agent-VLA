@@ -137,16 +137,31 @@ class RuntimeJournal:
         self.chunk_steps: int | None = None
         self.finish_requires_native_success = False
         self.planner_finish_reserve_calls = 0
+        self.planner_segment_handoff_hint = False
+        self.planner_task_hint = ""
         rules_ref = context.get("runtime_rules_ref")
         if rules_ref:
             rules = json.loads(Path(rules_ref).read_text(encoding="utf-8"))
             cap, baseline = rules.get("chunk_steps"), rules.get("baseline_chunk_steps")
             version = rules.get("schema")
             expected = {"schema", "chunk_steps", "baseline_chunk_steps"}
-            if version in {"rsi-runtime-rules-v2", "rsi-runtime-rules-v3"}:
+            if version in {
+                "rsi-runtime-rules-v2",
+                "rsi-runtime-rules-v3",
+                "rsi-runtime-rules-v4",
+                "rsi-runtime-rules-v5",
+            }:
                 expected.add("finish_requires_native_success")
-            if version == "rsi-runtime-rules-v3":
+            if version in {
+                "rsi-runtime-rules-v3",
+                "rsi-runtime-rules-v4",
+                "rsi-runtime-rules-v5",
+            }:
                 expected.add("planner_finish_reserve_calls")
+            if version in {"rsi-runtime-rules-v4", "rsi-runtime-rules-v5"}:
+                expected.add("planner_segment_handoff_hint")
+            if version == "rsi-runtime-rules-v5":
+                expected.add("planner_task_hint")
             if (
                 set(rules) != expected
                 or version
@@ -154,6 +169,8 @@ class RuntimeJournal:
                     "rsi-runtime-rules-v1",
                     "rsi-runtime-rules-v2",
                     "rsi-runtime-rules-v3",
+                    "rsi-runtime-rules-v4",
+                    "rsi-runtime-rules-v5",
                 }
                 or type(cap) is not int
                 or type(baseline) is not int
@@ -164,6 +181,18 @@ class RuntimeJournal:
             reserve = rules.get("planner_finish_reserve_calls", 0)
             if type(reserve) is not int or reserve not in {0, 1}:
                 raise ValueError("invalid finish reserve hint")
+            hint = rules.get("planner_segment_handoff_hint", False)
+            if type(hint) is not bool:
+                raise ValueError("invalid segment handoff hint")
+            task_hint = rules.get("planner_task_hint", "")
+            if version == "rsi-runtime-rules-v5" and (
+                not isinstance(task_hint, str)
+                or not task_hint.strip()
+                or len(task_hint) > 1200
+            ):
+                raise ValueError("invalid Planner task hint")
+            self.planner_task_hint = task_hint
+            self.planner_segment_handoff_hint = hint
             self.planner_finish_reserve_calls = reserve
             self.chunk_steps = cap
             self.finish_requires_native_success = rules.get(
@@ -176,6 +205,8 @@ class RuntimeJournal:
                 "chunk_steps": self.chunk_steps,
                 "finish_requires_native_success": self.finish_requires_native_success,
                 "planner_finish_reserve_calls": self.planner_finish_reserve_calls,
+                "planner_segment_handoff_hint": self.planner_segment_handoff_hint,
+                "planner_task_hint": self.planner_task_hint,
             },
             missing=["service_initialization_actions", "initial_reset_settling_steps"],
         )
@@ -224,6 +255,34 @@ class RuntimeJournal:
             self.sequence += 1
             return sequence
 
+    def close_planner_admission(self, *, source_sequence: int) -> None:
+        """Stop new model requests after native feedback, before media persistence.
+
+        This marker is only an admission boundary. The existing native_completion
+        record still requires task state capture before the SDK may close.
+        """
+        from rpent.evaluation import write_json_atomic
+
+        path = self.output_dir / "planner_admission_closed.json"
+        with self.lock:
+            if path.exists():
+                return
+            sequence = self.emit(
+                "planner_admission_closed",
+                reason="native_success_observed",
+                source_sequence=source_sequence,
+            )
+            write_json_atomic(
+                path,
+                {
+                    "identity": self.identity(),
+                    "reason": "native_success_observed",
+                    "sequence": sequence,
+                    "source_sequence": source_sequence,
+                    "monotonic_ns": time.monotonic_ns(),
+                },
+            )
+
     def complete_native_success(self, *, step: int) -> None:
         """Close Planner admission after native success and state capture."""
         from rpent.evaluation import write_json_atomic
@@ -240,6 +299,7 @@ class RuntimeJournal:
                     "reason": "native_success",
                     "step": step,
                     "sequence": sequence,
+                    "monotonic_ns": time.monotonic_ns(),
                 },
             )
 
@@ -255,6 +315,208 @@ class RuntimeJournal:
         ):
             raise ValueError("native completion identity/reason mismatch")
         return value
+
+    def planner_stop_evidence(
+        self, *, require_rejection: bool = False
+    ) -> dict[str, Any] | None:
+        """Verify a local stop after tools and forwarded model responses drain.
+
+        SDK error text is not evidence of where an HTTP failure originated.
+        A rejected request requires the transport's identity-bound receipt.
+        Process cleanup is verified separately by the launcher's finalizer.
+        """
+        with self.lock:
+            if self.active_tools:
+                return None
+            identity = {
+                key: self.context.get(key)
+                for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+            }
+            receipt_path = self.output_dir / "local_model_stop.json"
+            try:
+                receipt = (
+                    json.loads(receipt_path.read_text())
+                    if receipt_path.exists()
+                    else None
+                )
+                if require_rejection and receipt is None:
+                    return None
+                reason = receipt.get("reason") if receipt else "native_success"
+                if reason not in {"native_success", "budget_exhausted"}:
+                    return None
+                marker_path = (
+                    self.output_dir / "native_completion.json"
+                    if reason == "native_success"
+                    else self.budget_stop_path
+                )
+                marker = (
+                    self.native_completion()
+                    if reason == "native_success"
+                    else self.budget_stop()
+                )
+                if marker is None:
+                    return None
+                actions = [
+                    json.loads(line)
+                    for line in self.events_path.read_text().splitlines()
+                ]
+                if reason == "native_success":
+                    sequence = marker.get("sequence")
+                    if (
+                        type(sequence) is not int
+                        or not 0 <= sequence < len(actions)
+                        or actions[sequence].get("kind") != "native_completion"
+                        or actions[sequence].get("step") != marker.get("step")
+                    ):
+                        return None
+                elif marker.get("reason") not in {
+                    "model_requests",
+                    "tool_calls",
+                    "max_turns",
+                    "environment_steps",
+                }:
+                    return None
+                pending: list[str] = []
+                for index, event in enumerate(actions):
+                    if event.get("sequence") != index or any(
+                        event.get(k) != v for k, v in identity.items()
+                    ):
+                        return None
+                    if event["kind"] == "tool_call":
+                        pending.append(event["tool"])
+                    elif (
+                        event["kind"] == "tool_end"
+                        and event.get("status") != "rejected"
+                    ):
+                        if (
+                            event.get("tool") not in pending
+                            or event.get("status") != "completed"
+                        ):
+                            return None
+                        pending.remove(event["tool"])
+                    elif (
+                        event["kind"] == "inference_end"
+                        and event.get("completed") is False
+                        or event["kind"] == "action_feedback"
+                        and event.get("error")
+                        or event["kind"] == "vla_segment_end"
+                        and event.get("stop_reason") == "technical_error"
+                    ):
+                        return None
+                if pending:
+                    return None
+                events_path = self.output_dir / "model_requests.jsonl"
+                if not events_path.exists():
+                    return (
+                        None
+                        if require_rejection or os.environ.get("RSI_REQUEST_GATE_URL")
+                        else marker
+                    )
+                events = [
+                    json.loads(line) for line in events_path.read_text().splitlines()
+                ]
+                if any(
+                    event.get("sequence") != index or event.get("identity") != identity
+                    for index, event in enumerate(events)
+                ):
+                    return None
+                if receipt:
+                    index = receipt.get("rejection_sequence")
+                    if (
+                        receipt.get("identity") != identity
+                        or receipt.get("forwarded") is not False
+                        or type(index) is not int
+                        or not 0 <= index < len(events)
+                        or Path(receipt["model_requests_ref"]).resolve()
+                        != events_path.resolve()
+                        or Path(receipt["marker_ref"]).resolve()
+                        != marker_path.resolve()
+                        or receipt.get("marker_sequence") != marker.get("sequence")
+                    ):
+                        return None
+                    rejected = events[index]
+                    allowed = (
+                        {"native task completed"}
+                        if reason == "native_success"
+                        else {
+                            "runtime budget exhausted",
+                            "model request count or job wall limit",
+                        }
+                    )
+                    if (
+                        rejected.get("kind") != "rejected"
+                        or rejected.get("forwarded") is not False
+                        or rejected.get("reason") not in allowed
+                        or marker.get("monotonic_ns", float("inf")) / 1e9
+                        > rejected["monotonic_seconds"]
+                        or any(
+                            event["kind"] == "request_admitted"
+                            for event in events[index + 1 :]
+                        )
+                    ):
+                        return None
+                admitted = [
+                    event["request_number"]
+                    for event in events
+                    if event["kind"] == "request_admitted"
+                ]
+                if len(set(admitted)) != len(admitted):
+                    return None
+                if any(
+                    event["kind"] in {"transport_error", "request_incomplete"}
+                    or event["kind"] == "request_returned"
+                    and event.get("http_status") != 200
+                    or event["kind"] == "response_terminal"
+                    and event.get("event_type") != "response.completed"
+                    for event in events
+                ):
+                    return None
+                for number in admitted:
+                    terminal = [
+                        event
+                        for event in events
+                        if event["kind"] == "response_terminal"
+                        and event.get("request_number") == number
+                    ]
+                    returned = [
+                        event
+                        for event in events
+                        if event["kind"] == "request_returned"
+                        and event.get("request_number") == number
+                    ]
+                    if len(terminal) != 1 or len(returned) != 1:
+                        return None
+                    usage = terminal[0].get("usage") or {}
+                    values = [
+                        usage.get("input_tokens"),
+                        usage.get("output_tokens"),
+                        (usage.get("input_tokens_details") or {}).get("cached_tokens"),
+                    ]
+                    if any(type(value) is not int or value < 0 for value in values):
+                        return None
+                for event in events:
+                    if event["kind"] != "downstream_closed":
+                        continue
+                    if (
+                        reason != "native_success"
+                        or event.get("reason") != "native_success"
+                        or event.get("native_completion_sequence")
+                        != marker.get("sequence")
+                        or Path(event["native_completion_ref"]).resolve()
+                        != marker_path.resolve()
+                        or marker["monotonic_ns"] / 1e9 > event["monotonic_seconds"]
+                        or event.get("request_number") not in admitted
+                    ):
+                        return None
+                if receipt:
+                    return {
+                        **marker,
+                        "local_model_stop": receipt,
+                        "local_model_stop_ref": str(receipt_path),
+                    }
+                return marker
+            except (OSError, ValueError, KeyError, TypeError):
+                return None
 
     def budget_snapshot(self) -> dict[str, Any]:
         """Read current owner snapshots; never reserve or charge another call."""

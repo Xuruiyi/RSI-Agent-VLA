@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from rpent.flywheel.episode import EpisodeWriter
+from rpent.flywheel.episode import BatchedEpisodeWriter, EpisodeWriter
 
 _SUITE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -76,16 +76,33 @@ def create_episode_writer(config: dict[str, Any], obs: dict[str, Any]) -> Episod
     language = obs.get("task_descriptions")
     if not isinstance(language, str) or not language:
         raise ValueError("LIBERO observation has no task description")
-    return EpisodeWriter(
+    bounded = config.get("collection_version") == "aligned-batches-v1"
+    writer = BatchedEpisodeWriter if bounded else EpisodeWriter
+    return writer(
         parent / f"seed_{seed:03d}",
         metadata={
             "suite": config["suite"],
             "task_id": config["task_id"],
             "seed": seed,
             "task_language": language,
+            **config.get("identity", {}),
+            "runtime_identity": config.get("identity", {}),
+            "native_action_spec": config.get("native_action_spec"),
+            "collection_config": {**config, "root": str(config["root"])},
+            "information_scope": config.get("information_scope", "unspecified"),
+            "action_contract": {
+                "images": "RGB uint8 256x256; native agentview/wrist rotated 180deg; policy orientation",
+                "state": "EEF xyz metres, axis-angle radians, two gripper qpos metres; float32[8]",
+                "actions": "native OSC_POSE normalized xyz/axis-angle delta; gripper -1 open +1 close; float32[7]",
+                "frame": "reference frame and scaling are in native_action_spec; no extra delta transform; not joint commands",
+                "frequency": "nominal 20Hz, not measured; indices are returned control slots, wall clock separate",
+                "exact_state": "input files and raw_states retain original dtype; states is float32 export view",
+                "model_input": "exact predict() input before installed model transforms; processor bound by bundle",
+            },
         },
         initial_observation=obs,
         spec=LIBERO_SPEC,
+        **({"flush_steps": config.get("flush_steps", 25)} if bounded else {}),
     )
 
 

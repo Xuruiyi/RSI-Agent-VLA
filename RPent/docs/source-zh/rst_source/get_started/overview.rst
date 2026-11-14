@@ -1,15 +1,15 @@
 RPent 简介
 ============
 
-RPent（Recursive Physical Agent）是一个开源框架，用于构建能够在与物理世界的递归交互中持续演进的具身智能体。RPent 不限定基础模型的选择，而是提供一套递归的智能体框架，将感知、推理、记忆、执行和自我演进等不同类型的智能能力整合到统一的物理智能体中。物理智能体在持续交互中不断反思和调整，从而获得新能力，逐步突破初始设计的能力边界。
+RPent（Recursive Physical Agent）是一个具身智能体开源框架，将规划器与感知、动作模型、程序化工具和任务记忆连接起来。规划器观察环境、选择工具，再根据执行结果决定下一步；探索模式将经验保存下来，供后续运行复用。
 
-Pent 这个名字源自五芒星（Pentagram），其五个顶点象征多模态智能融合为一个统一的具身智能体。中心的无穷符号（∞）代表感知、推理、执行和自我演进的递归循环，让智能持续向物理世界扩展。
+Pent 源自五芒星（Pentagram），五个顶点象征不同能力的组合，中心的无穷符号（∞）代表持续的观测与动作循环。
 
 .. image:: https://raw.githubusercontent.com/RLinf/misc/main/pic/rpent_framework.png
    :alt: RPent 规划、感知、记忆和执行架构
    :width: 100%
 
-RPent 的三条核心设计原则是服务化、标准化和可组合（service-oriented, standardized, and composable）。各种能力以可复用服务的形式部署，通过统一接口连接，并灵活组合成不同的物理智能体。这些原则使 RPent 能够超越传统机器人控制框架，成为面向物理世界的智能体基础设施，让智能在部署后继续被构建、扩展和演进。
+RPent 遵循服务化、标准化和可组合的设计原则。模型与环境作为可复用服务运行，通过统一接口连接，规划器、工具和机器人可独立扩展。执行流程与模块职责见 :doc:`../development/architecture`。
 
 排行榜
 ------
@@ -40,18 +40,18 @@ RPent 的三条核心设计原则是服务化、标准化和可组合（service-
    * - :doc:`RoboTwin <../simulators/robotwin>`
      - LingBot-VLA、双臂仿真任务和 C2R 复现。
    * - :doc:`RoboDojo <../simulators/robodojo>`
-     - Isaac Sim 双臂 ARX-X5 操作，使用 RLinf Pi0.5 策略。
+     - Isaac Sim 双臂 ARX-X5 操作，使用 cuRobo 运动规划与 SAM3。
    * - :doc:`单臂 Franka <../real_world_robots/franka>`
      - 硬件准备、标定、自检和运行。
    * - :doc:`双臂 Franka <../real_world_robots/dual_franka>`
      - 双节点部署、操作与人工参与的探索。
    * - :doc:`YAM <../real_world_robots/yam>`
-     - 已有任务演示；安装使用文档即将推出。
+     - 双机部署、操作员控制、任务运行与探索。
    * - :doc:`SO-101 <../real_world_robots/so101>`
      - 内容即将推出。
 
-规划器可选择 ``api``、``claude_code`` 或 ``codex``；LIBERO 还提供用于执行已有计划的 :doc:`Flash Mode <../guides/flash>`。模型服务配置见 :doc:`../guides/configure_planner`。
+在线规划器可选择 ``api``、``claude_code`` 或 ``codex``。LIBERO 支持 :doc:`Flash Mode <../guides/flash>`，单臂和双臂 Franka 支持 :ref:`经审核的 Flash 任务卡 <franka-flash>`。模型服务配置见 :doc:`../guides/configure_planner`。
 
 从 :doc:`quickstart` 开始运行第一个任务。评测成绩和资源开销见 :doc:`../leaderboard/index`，研究背景见 :doc:`../resources/harnessvla`。
 
-DreamZero、Cosmos Policy 和 RoboDojo 也列在项目的规划中，相关使用文档待补充。
+Cosmos Policy、Cosmos3 和 Fast-WAM 的部署及支持的平台组合见 :doc:`../development/add_action_model`。DreamZero 仍在规划中。

@@ -19,6 +19,7 @@ import json
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -50,6 +51,69 @@ class RecordingSink:
 
     def emit(self, event: Any) -> None:
         self.events.append(event)
+
+
+def local_stop_fixture(tmp_path, *, budget=False):
+    from rpent.session.runtime import RuntimeJournal
+
+    identity = {"run_id": "r", "episode_id": "e", "bundle_id": "b", "protocol_id": "p"}
+    journal = RuntimeJournal(
+        {
+            **identity,
+            "output_dir": str(tmp_path),
+            "limits": {"tool_calls": 5, "wall_seconds": 30},
+        }
+    )
+    if budget:
+        marker = journal.mark_budget_stop("model_requests", limit=1, observed=1)
+        marker_path = journal.budget_stop_path
+    else:
+        journal.complete_native_success(step=1)
+        marker = journal.native_completion()
+        marker_path = tmp_path / "native_completion.json"
+    events = [
+        {"kind": "request_admitted", "request_number": 1},
+        {
+            "kind": "response_terminal",
+            "request_number": 1,
+            "event_type": "response.completed",
+            "usage": {
+                "input_tokens": 8,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 2,
+            },
+        },
+        {"kind": "request_returned", "request_number": 1, "http_status": 200},
+        {
+            "kind": "rejected",
+            "reason": "runtime budget exhausted" if budget else "native task completed",
+            "forwarded": False,
+            "monotonic_seconds": time.monotonic(),
+        },
+    ]
+    events = [
+        {"identity": identity, "sequence": i, **event} for i, event in enumerate(events)
+    ]
+    events_path = tmp_path / "model_requests.jsonl"
+    events_path.write_text("\n".join(map(json.dumps, events)) + "\n")
+    receipt = {
+        "schema_version": "1.0",
+        "identity": identity,
+        "forwarded": False,
+        "reason": "budget_exhausted" if budget else "native_success",
+        "rejection_sequence": 3,
+        "model_requests_ref": str(events_path),
+        "marker_ref": str(marker_path),
+        "marker_sequence": marker["sequence"],
+    }
+    (tmp_path / "local_model_stop.json").write_text(json.dumps(receipt))
+    error = {
+        "codex_error_info": {
+            "response_too_many_failed_attempts": {"http_status_code": 429}
+        },
+        "message": "exceeded retry limit, last status: 429 Too Many Requests",
+    }
+    return journal, error, events
 
 
 class FakeToolkit:
@@ -1195,6 +1259,362 @@ def test_probe_forwards_image_and_schema(probe_codex: Any) -> None:
     assert isinstance(payload[1], codex_module.openai_codex.ImageInput)
     assert options["output_schema"] == schema
     assert reply == '{"point_xy":null}'
+
+
+@pytest.mark.parametrize("budget", [False, True])
+def test_local_rejection_real_sdk_error_then_failed_turn_and_exception(
+    tmp_path, monkeypatch, budget
+):
+    journal, error, _ = local_stop_fixture(tmp_path, budget=budget)
+    install_fake_backend(monkeypatch)
+    FakeCodex.events = [
+        {"method": "error", "payload": {"error": error, "will_retry": False}},
+        {
+            "method": "turn/completed",
+            "payload": {"turn": {"status": "failed", "error": error}},
+        },
+    ]
+    original_stream = FakeTurn.stream
+
+    def stream(turn):
+        yield from original_stream(turn)
+        raise JsonRpcError(
+            -32000, error["message"], {"codex_error_info": error["codex_error_info"]}
+        )
+
+    monkeypatch.setattr(FakeTurn, "stream", stream)
+    toolkit = FakeToolkit()
+    toolkit.runtime_journal = journal
+    result = make_planner(tmp_path, RecordingSink()).solve(
+        system_prompt="", user_message="offline", toolkit=toolkit, max_turns=20
+    )
+    assert result.error is None
+    assert result.stats["attempt_closed"] is True
+    assert result.stats["planner_turn_status"] == "failed"
+    assert result.stats["termination_reason"] == (
+        "verified_budget_exhaustion" if budget else "native_success"
+    )
+    assert len(result.stats["sdk_errors"]) == 3
+    assert result.stats["sdk_errors"][0]["error"]["error"] == error
+    assert result.stats["sdk_errors"][-1]["error"]["type"] == "JsonRpcError"
+    assert FakeCodex.instances[0].closed and FakeMcpServer.instances[0].stopped
+    assert toolkit.cancel_calls == 1
+
+
+@pytest.mark.parametrize(
+    "gap",
+    [
+        "receipt",
+        "marker",
+        "identity",
+        "usage",
+        "upstream429",
+        "transport",
+        "tools",
+        "other_error",
+        "string_only",
+        "external_tool",
+    ],
+)
+def test_local_rejection_never_masks_missing_evidence_or_real_error(tmp_path, gap):
+    journal, error, events = local_stop_fixture(tmp_path)
+    if gap == "receipt":
+        (tmp_path / "local_model_stop.json").unlink()
+    elif gap == "marker":
+        (tmp_path / "native_completion.json").unlink()
+    elif gap == "identity":
+        path = tmp_path / "local_model_stop.json"
+        receipt = json.loads(path.read_text())
+        receipt["identity"]["run_id"] = "another"
+        path.write_text(json.dumps(receipt))
+    elif gap == "usage":
+        del events[1]["usage"]["input_tokens_details"]
+    elif gap == "upstream429":
+        events[2]["http_status"] = 429
+    elif gap == "transport":
+        events.append(
+            {
+                "identity": events[0]["identity"],
+                "sequence": len(events),
+                "kind": "transport_error",
+            }
+        )
+    elif gap == "tools":
+        journal.active_tools = 1
+    (tmp_path / "model_requests.jsonl").write_text(
+        "\n".join(map(json.dumps, events)) + "\n"
+    )
+    recorder = codex_module._Recorder(20, RecordingSink(), runtime_journal=journal)
+    if gap == "other_error":
+        recorder.observe(
+            {
+                "method": "fatal",
+                "payload": {"error": {"message": "real transport failure"}},
+            }
+        )
+    elif gap == "string_only":
+        error = {
+            "message": "native task completed; no further Planner request forwarded"
+        }
+    elif gap == "external_tool":
+        recorder.observe(
+            {
+                "method": "item/started",
+                "payload": {"item": {"id": "shell-1", "type": "commandExecution"}},
+            }
+        )
+    recorder.observe(
+        {"method": "error", "payload": {"error": error, "will_retry": False}}
+    )
+    recorder.observe(
+        {
+            "method": "turn/completed",
+            "payload": {"turn": {"status": "failed", "error": error}},
+        }
+    )
+    assert recorder.error is not None
+    assert recorder.request_native_stop() is None
+    assert recorder.stats()["attempt_closed"] is False
+    assert recorder.stats()["sdk_errors"]
+
+
+def test_pending_local_rejection_waits_for_l0_terminal(tmp_path):
+    journal, error, _ = local_stop_fixture(tmp_path)
+    journal.active_tools = 1
+    journal.emit("tool_call", tool="vla_execute")
+    recorder = codex_module._Recorder(20, RecordingSink(), runtime_journal=journal)
+    recorder.observe({"method": "error", "payload": {"error": error}})
+    assert recorder.error and recorder.request_native_stop() is None
+    journal.emit("tool_end", tool="vla_execute", status="completed")
+    assert recorder.stats()["attempt_closed"] is True
+    assert recorder.error is None
+
+
+def test_sdk_tool_starts_count_missing_terminals_and_deduplicate_by_item_id():
+    recorder = codex_module._Recorder(20, RecordingSink())
+    for method, item_id in [
+        ("item/started", "read"),
+        ("item/completed", "read"),
+        ("item/completed", "read"),
+        ("item/started", "action"),
+    ]:
+        recorder.observe(
+            {
+                "method": method,
+                "payload": {
+                    "item": {
+                        "id": item_id,
+                        "type": "mcpToolCall",
+                        "server": "rpent",
+                        "tool": "view_env_state",
+                    }
+                },
+            }
+        )
+    assert recorder.stats()["tool_calls"] == 2
+
+
+@pytest.mark.parametrize("budget", [False, True])
+@pytest.mark.parametrize("exception", [False, True])
+def test_dashboard_local_rejection_preserves_sdk_failed_status_and_raw_errors(
+    tmp_path, budget, exception
+):
+    journal, error, _ = local_stop_fixture(tmp_path, budget=budget)
+
+    async def run():
+        class Turn:
+            async def stream(self):
+                yield {"method": "error", "payload": {"error": error}}
+                if exception:
+                    raise JsonRpcError(
+                        -32000,
+                        error["message"],
+                        {"codex_error_info": error["codex_error_info"]},
+                    )
+                yield {
+                    "method": "turn/completed",
+                    "payload": {"turn": {"status": "failed", "error": error}},
+                }
+
+            async def interrupt(self):
+                raise AssertionError("local rejection already stopped new requests")
+
+        ended = []
+        recorder = codex_module._Recorder(20, RecordingSink(), runtime_journal=journal)
+        session = codex_module._CodexDashboardSession(
+            config=None,
+            thread_options={},
+            turn_options={},
+            recorder=recorder,
+            emit_event=recorder.observe,
+            control=SimpleNamespace(end=lambda: ended.append(True)),
+        )
+        done = asyncio.Event()
+        await session._consume_turn(Turn(), done)
+        assert done.is_set() and ended and session.error is None
+        assert recorder.stats()["attempt_closed"] is True
+        assert len(recorder.stats()["sdk_errors"]) == 2
+        if not exception:
+            assert recorder.planner_turn_status == "failed"
+
+    asyncio.run(run())
+
+
+def test_local_rejection_accepts_only_evidenced_native_consumer_close(tmp_path):
+    journal, error, events = local_stop_fixture(tmp_path)
+    marker = journal.native_completion()
+    closed = {
+        "identity": events[0]["identity"],
+        "sequence": len(events),
+        "kind": "downstream_closed",
+        "reason": "native_success",
+        "native_completion_sequence": marker["sequence"],
+        "native_completion_ref": str(tmp_path / "native_completion.json"),
+        "monotonic_seconds": time.monotonic(),
+        "request_number": 1,
+    }
+    events.append(closed)
+    (tmp_path / "model_requests.jsonl").write_text("\n".join(map(json.dumps, events)))
+    recorder = codex_module._Recorder(20, RecordingSink(), runtime_journal=journal)
+    assert recorder.observe_native_gate_rejection(error)
+    closed["reason"] = "client_disconnected"
+    (tmp_path / "model_requests.jsonl").write_text("\n".join(map(json.dumps, events)))
+    bad = codex_module._Recorder(20, RecordingSink(), runtime_journal=journal)
+    assert not bad.observe_native_gate_rejection(error)
+    assert bad.error
+
+
+@pytest.mark.parametrize("failure", ["timeout", "cleanup"])
+def test_local_rejection_preserves_controller_timeout_and_cleanup_failure(
+    tmp_path, monkeypatch, failure
+):
+    journal, error, _ = local_stop_fixture(tmp_path)
+    install_fake_backend(monkeypatch)
+
+    def stream(turn):
+        yield {"method": "error", "payload": {"error": error}}
+        if failure == "timeout":
+            time.sleep(0.03)
+        raise JsonRpcError(
+            -32000, error["message"], {"codex_error_info": error["codex_error_info"]}
+        )
+
+    monkeypatch.setattr(FakeTurn, "stream", stream)
+    toolkit = FakeToolkit()
+    toolkit.runtime_journal = journal
+    if failure == "cleanup":
+
+        def fail_cleanup():
+            raise RuntimeError("tool cleanup failed")
+
+        toolkit.cancel_active_and_wait = fail_cleanup
+    result = make_planner(
+        tmp_path, RecordingSink(), timeout_s=0.01 if failure == "timeout" else 1
+    ).solve(system_prompt="", user_message="offline", toolkit=toolkit, max_turns=20)
+    assert result.error is not None
+    assert (
+        "timed out" in result.error
+        if failure == "timeout"
+        else "tool cleanup failed" in result.error
+    )
+    assert result.stats["sdk_errors"]
+
+
+@pytest.mark.parametrize("exception", [False, True])
+def test_local_budget_rejection_drains_tool_writes_before_sdk_and_toolkit_cleanup(
+    tmp_path, monkeypatch, exception
+):
+    journal, error, _ = local_stop_fixture(tmp_path, budget=True)
+    install_fake_backend(monkeypatch)
+    journal.active_tools = 1
+    journal.emit("tool_call", tool="vla_execute")
+    persisted = threading.Event()
+
+    def finish_tool():
+        time.sleep(0.03)
+        (tmp_path / "tool-persisted.json").write_text('{"saved":true}')
+        journal.emit("tool_end", tool="vla_execute", status="completed")
+        persisted.set()
+
+    def stream(turn):
+        worker.start()
+        if exception:
+            raise JsonRpcError(
+                -32000,
+                error["message"],
+                {"codex_error_info": error["codex_error_info"]},
+            )
+        yield {"method": "error", "payload": {"error": error}}
+        yield {
+            "method": "turn/completed",
+            "payload": {"turn": {"status": "failed", "error": error}},
+        }
+
+    def close_sdk(sdk, *args):
+        assert persisted.is_set(), "SDK closed while admitted tool was still writing"
+        sdk.closed = True
+
+    worker = threading.Thread(target=finish_tool)
+    monkeypatch.setattr(FakeTurn, "stream", stream)
+    monkeypatch.setattr(FakeCodex, "__exit__", close_sdk)
+    toolkit = FakeToolkit()
+    toolkit.runtime_journal = journal
+
+    def cleanup_toolkit():
+        assert persisted.is_set() and journal.active_tools == 0
+
+    toolkit.cancel_active_and_wait = cleanup_toolkit
+    result = make_planner(tmp_path, RecordingSink()).solve(
+        system_prompt="", user_message="offline", toolkit=toolkit, max_turns=20
+    )
+    worker.join(timeout=1)
+    assert result.error is None
+    assert result.stats["termination_reason"] == "verified_budget_exhaustion"
+    assert json.loads((tmp_path / "tool-persisted.json").read_text()) == {"saved": True}
+
+
+def test_dashboard_local_budget_rejection_waits_for_active_tool(tmp_path):
+    journal, error, _ = local_stop_fixture(tmp_path, budget=True)
+    journal.active_tools = 1
+    journal.emit("tool_call", tool="vla_execute")
+    persisted = threading.Event()
+
+    def finish_tool():
+        time.sleep(0.03)
+        journal.emit("tool_end", tool="vla_execute", status="completed")
+        persisted.set()
+
+    async def run():
+        class Turn:
+            async def stream(self):
+                worker.start()
+                yield {"method": "error", "payload": {"error": error}}
+                assert persisted.is_set()
+                yield {
+                    "method": "turn/completed",
+                    "payload": {"turn": {"status": "failed", "error": error}},
+                }
+
+        recorder = codex_module._Recorder(
+            20,
+            RecordingSink(),
+            runtime_journal=journal,
+            tool_drain_deadline=time.monotonic() + 1,
+        )
+        session = codex_module._CodexDashboardSession(
+            config=None,
+            thread_options={},
+            turn_options={},
+            recorder=recorder,
+            emit_event=recorder.observe,
+            control=SimpleNamespace(end=lambda: None),
+        )
+        await session._consume_turn(Turn(), asyncio.Event())
+        assert session.error is None and recorder.stats()["attempt_closed"]
+
+    worker = threading.Thread(target=finish_tool)
+    asyncio.run(run())
+    worker.join(timeout=1)
 
 
 def test_retry_error_is_visible_without_poisoning_successful_turn():

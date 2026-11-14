@@ -8,7 +8,7 @@
 
 RPent 的动作工具主要分为两类：
 
-- **VLA 动作**：由视觉语言动作模型生成动作序列，例如 LIBERO 的 ``pi0_pick``。模型通常在独立服务中运行。
+- **基于模型的动作**：由 VLA 或 WAM 预测动作序列，例如 LIBERO 的 ``pi0_pick`` 或 ``wam_act``。模型通常在独立服务中运行。
 - **程序化动作**：按参数执行运动，例如 ``move_to``、``rotate_wrist`` 和 ``release``。具体名称与参数由环境定义。
 
 ``back_project``、``segment`` 和 ``view_env_state`` 属于感知或状态读取工具，本身不代表机器人运动。``finish`` 用于结束规划器循环，任务是否成功仍由环境或真机操作员判定。
@@ -22,17 +22,21 @@ RPent 的动作工具主要分为两类：
    * - 环境 / 机器人
      - 动作模型与配置
    * - :doc:`../simulators/libero`
-     - Pi0.5
+     - Pi0.5；standard/Pro 评测还支持 Cosmos Policy、Cosmos3 和 Fast-WAM。
    * - :doc:`../simulators/robocasa`
      - RLDX-1
    * - :doc:`../simulators/robotwin`
-     - LingBot-VLA
+     - LingBot-VLA；使用 RoboTwin checkpoint 的 Fast-WAM。
+   * - :doc:`../simulators/robodojo`
+     - 程序化位姿与夹爪原语、SAM3；启动时不加载动作模型。
    * - :doc:`../real_world_robots/franka`
      - Pi0.5 / openpi
    * - :doc:`../real_world_robots/dual_franka`
      - Pi0.5 / openpi
+   * - :doc:`../real_world_robots/yam`
+     - Pi0.5 / openpi；连接独立部署的服务。
 
-各平台页面给出模型路径、工具范围和任务要求。SO-101 内容尚待补充，见 :doc:`../real_world_robots/yam` 和 :doc:`../real_world_robots/so101`。
+各平台页面给出模型路径、工具范围和任务要求。:doc:`SO-101 <../real_world_robots/so101>` 内容待补充。WAM 部署及兼容 checkpoint 见 :doc:`../development/add_action_model`。
 
 服务与扩展
 ---------------

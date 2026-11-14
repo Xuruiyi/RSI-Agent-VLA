@@ -185,6 +185,26 @@ def finalize_run(context: RunFinalizationContext) -> Path:
                 )
         except (OSError, ValueError, TypeError):
             service_missing.append("unverified_budget_stop")
+    # A local admission rejection may be reported as a failed SDK turn. Keep
+    # that raw status; only its bound, persisted receipt permits budget closure.
+    local_budget_failure = False
+    if budget_verified and context.stats.get("planner_turn_status") == "failed":
+        local = planner_stop.get("local_model_stop") or {}
+        errors = context.stats.get("sdk_errors") or []
+        try:
+            saved = json.loads(Path(planner_stop["local_model_stop_ref"]).read_text())
+            local_budget_failure = bool(
+                saved == local
+                and local.get("identity") == identity
+                and local.get("reason") == "budget_exhausted"
+                and local.get("forwarded") is False
+                and local.get("marker_ref") == planner_stop["budget_stop_ref"]
+                and local.get("marker_sequence") == planner_stop["sequence"]
+                and errors
+                and all(e.get("local_rejection_candidate") is True for e in errors)
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     budget_closed = bool(
         budget_verified
         and service_confirmed
@@ -194,7 +214,10 @@ def finalize_run(context: RunFinalizationContext) -> Path:
         and not finish.get("operator_aborted")
         and not finish.get("interrupted")
         and context.stats.get("attempt_closed") is True
-        and context.stats.get("planner_turn_status") in {"interrupted", "completed"}
+        and (
+            context.stats.get("planner_turn_status") in {"interrupted", "completed"}
+            or local_budget_failure
+        )
     )
     normal_closed = bool(
         not technical
@@ -280,6 +303,16 @@ def finalize_run(context: RunFinalizationContext) -> Path:
             "settled": None,
         },
         "error": context.agent_error,
+        "planner_diagnostics": {
+            key: context.stats[key]
+            for key in (
+                "sdk_errors",
+                "planner_turn_status",
+                "planner_native_stop",
+                "planner_budget_stop",
+            )
+            if key in context.stats
+        },
         "execution_health": health,
         "elapsed_s": round(context.elapsed_s, 1),
         "planner": {

@@ -1,0 +1,461 @@
+{
+  "protocol_id": "rsi-libero-pro-5a-frozen-four-seed3-20261112-pilot02",
+  "status": "frozen",
+  "scope": "simulation",
+  "dynamic_authorized": true,
+  "benchmark_id": "liberopro-5a-frozen-four-seed3-20261112-pilot02",
+  "anchor_bundle_id": "initial-medium-5a-frozen-20261112-pilot02",
+  "purpose": "Finite engineering release pilot for tabletop manipulation; no H3 unseen-problem exam or statistical efficacy claim.",
+  "asset_binding": {
+    "installation_reference": "RPent/.venv/lib/python3.11/site-packages/liberopro/liberopro",
+    "configuration_reference": "~/.liberopro/config.yaml",
+    "liberopro_commit": "d1e11fb181b8544487d27742c0caa3a4d46452ad",
+    "task_order_index": 0,
+    "task_id_basis": "installed benchmark source order; base order index 0 is identity; PRO swap uses shared base names in source order",
+    "seed_mapping": "init_index=seed % init_count; specific_reset_id=sum(prior task init counts)+init_index; fixed seed does not prove intermediate snapshot/restore",
+    "init_evidence": "ZIP + pickletools opcode inspection only; no torch import, unpickle, simulation or GPU"
+  },
+  "tasks": [
+    {
+      "task_key": "base_salad",
+      "group": "base",
+      "suite": "libero_object",
+      "task_id": 2,
+      "task_order_index": 0,
+      "task_name": "pick_up_the_salad_dressing_and_place_it_in_the_basket",
+      "language": "Pick the salad dressing and place it in the basket",
+      "bddl_relative_path": "bddl_files/libero_object/pick_up_the_salad_dressing_and_place_it_in_the_basket.bddl",
+      "init_relative_path": "init_files/libero_object/pick_up_the_salad_dressing_and_place_it_in_the_basket.pruned_init",
+      "init_shape_static": [
+        50,
+        110
+      ],
+      "asset_check_level": "static_stdlib_ast_zip_pickle_opcodes",
+      "runtime_verified": false,
+      "runtime_verified_scope": "not run in this task"
+    },
+    {
+      "task_key": "position_swap_salad",
+      "group": "controlled",
+      "suite": "libero_object_swap",
+      "task_id": 2,
+      "task_order_index": 0,
+      "task_name": "pick_up_the_salad_dressing_and_place_it_in_the_basket",
+      "language": "Pick the salad dressing and place it in the basket",
+      "bddl_relative_path": "bddl_files/libero_object_swap/pick_up_the_salad_dressing_and_place_it_in_the_basket.bddl",
+      "init_relative_path": "init_files/libero_object_swap/pick_up_the_salad_dressing_and_place_it_in_the_basket.pruned_init",
+      "init_shape_static": [
+        50,
+        110
+      ],
+      "asset_check_level": "static_stdlib_ast_zip_pickle_opcodes",
+      "runtime_verified": true,
+      "runtime_verified_scope": "historical seed 0 mixed execution only; independent success unknown"
+    },
+    {
+      "task_key": "old_milk",
+      "group": "old",
+      "suite": "libero_object",
+      "task_id": 7,
+      "task_order_index": 0,
+      "task_name": "pick_up_the_milk_and_place_it_in_the_basket",
+      "language": "Pick the milk and place it in the basket",
+      "bddl_relative_path": "bddl_files/libero_object/pick_up_the_milk_and_place_it_in_the_basket.bddl",
+      "init_relative_path": "init_files/libero_object/pick_up_the_milk_and_place_it_in_the_basket.pruned_init",
+      "init_shape_static": [
+        50,
+        110
+      ],
+      "asset_check_level": "static_stdlib_ast_zip_pickle_opcodes",
+      "runtime_verified": false,
+      "runtime_verified_scope": "not run in this task"
+    },
+    {
+      "task_key": "old_drawer",
+      "group": "old",
+      "suite": "libero_goal",
+      "task_id": 0,
+      "task_order_index": 0,
+      "task_name": "open_the_middle_drawer_of_the_cabinet",
+      "language": "Open the middle layer of the drawer",
+      "bddl_relative_path": "bddl_files/libero_goal/open_the_middle_drawer_of_the_cabinet.bddl",
+      "init_relative_path": "init_files/libero_goal/open_the_middle_drawer_of_the_cabinet.pruned_init",
+      "init_shape_static": [
+        50,
+        79
+      ],
+      "asset_check_level": "static_stdlib_ast_zip_pickle_opcodes",
+      "runtime_verified": false,
+      "runtime_verified_scope": "not run in this task"
+    }
+  ],
+  "task_sets": {
+    "development": {
+      "task_keys": [
+        "base_salad",
+        "position_swap_salad",
+        "old_milk",
+        "old_drawer"
+      ],
+      "seeds": [
+        1,
+        2
+      ],
+      "init_indices": [
+        1,
+        2
+      ],
+      "assignments_per_bundle": 8,
+      "feedback": "available to researcher",
+      "benchmark_id": "liberopro-5a-frozen-development-20261112-pilot02",
+      "authorized": true
+    },
+    "release": {
+      "task_keys": [
+        "base_salad",
+        "position_swap_salad",
+        "old_milk",
+        "old_drawer"
+      ],
+      "seeds": [
+        3
+      ],
+      "init_indices": [
+        3
+      ],
+      "assignments_per_bundle": 4,
+      "feedback": "independent evaluator; permitted release feedback is not unseen testing",
+      "benchmark_id": "liberopro-5a-frozen-four-seed3-20261112-pilot02",
+      "authorized": false
+    },
+    "sealed": {
+      "task_keys": [
+        "base_salad",
+        "position_swap_salad",
+        "old_milk",
+        "old_drawer"
+      ],
+      "seeds": [
+        5,
+        6
+      ],
+      "init_indices": [
+        5,
+        6
+      ],
+      "assignments_per_bundle": 8,
+      "feedback": "evaluation labels and aggregate results withheld from candidate and snapshot selection",
+      "benchmark_id": "liberopro-5a-frozen-sealed-20261112-pilot02",
+      "authorized": false,
+      "is_h3_unseen_problem_exam": false,
+      "knowledge_boundary": "Frozen seeds reserve initial states only. External GPT_5.5_xhigh prior may include recipes for these task families or seeds; its content is not assumed unseen. Inspect and bind identical legal prior before comparisons; no H3 unseen-problem claim."
+    },
+    "historical_development_only": {
+      "suite": "libero_object_swap",
+      "task_id": 2,
+      "seed": 0,
+      "included_in_formal_denominator": false,
+      "reason": "already observed engineering smoke; independent success is unknown"
+    }
+  },
+  "runtime_config": {
+    "planner": "codex",
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "medium",
+    "memory_version": "GPT_5.5_xhigh",
+    "memory_snapshot": "47f301ef33bf8d0e8c770342f16b3c39c6a0e8c1",
+    "memory_origin": "external upstream prior, not this project meta-learning",
+    "libero_type": "pro",
+    "execution_mode": "mixed VLA and existing geometric primitives; all action sources recorded",
+    "model_reference": "checkpoints/RLinf-Pi05-LIBERO-130-fullshot-SFT",
+    "model_revision": "6222623f635769bfc73c9472e29fab9b7fd8e027",
+    "norm_reference": "checkpoint/physical-intelligence/libero",
+    "backend_contract": "Record actual installed model horizon, execution chunk, camera/state processing, units and clocks; preserve native protocol. A changed protocol requires matched new baseline. v3 service-side total step count includes reset/setup; client/server counts never double-added.",
+    "profile_reference": "config/run_profile_5a_frozen_20261112_pilot02.json",
+    "authority": "new common frozen profile; dynamic eligibility only for this bounded pilot, specific new job permits still required",
+    "pilot_overrides": {
+      "max_episode_steps": 2000,
+      "profile_max_episode_steps": 2000,
+      "validation": "v2 effective profile already uses 2000 for all matched comparisons; no medium baseline measured yet."
+    },
+    "research_llm": {
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium"
+    },
+    "token_policy": "observed_only",
+    "model_requests_per_attempt": 20,
+    "discrete_state_input": false
+  },
+  "metrics": {
+    "success_base": {
+      "direction": "max",
+      "min": 0,
+      "max": 1,
+      "weight": 0.4
+    },
+    "success_controlled": {
+      "direction": "max",
+      "min": 0,
+      "max": 1,
+      "weight": 0.35
+    },
+    "success_old": {
+      "direction": "max",
+      "min": 0,
+      "max": 1,
+      "weight": 0.25
+    }
+  },
+  "metric_definition": {
+    "success_base": "success/all 1 base release assignment",
+    "success_controlled": "success/all 1 controlled release assignment",
+    "success_old": "mean of per-task success/all 1 assignment for old_milk and old_drawer",
+    "normalization": "z=(x-min)/(max-min); no data-dependent reference scaling",
+    "score": "J=0.40*success_base+0.35*success_controlled+0.25*success_old",
+    "weights_basis": "Engineering priority: basic task 40%, controlled position robustness 35%, two old-capability probes macro-averaged 25%; critical old preservation separately protected. Chosen before candidate outcomes; no estimated utility or statistical guarantee."
+  },
+  "cost_weights": {},
+  "cost_policy": "All costs are recorded as a resource vector and constrained by budget, not also deducted from J.",
+  "min_gain": 0.02,
+  "anchor_max_drop": 0.02,
+  "hard_constraints": {
+    "safety": "No confirmed execution safety or governance breach; native finite action, configured step/timeout and tool permissions remain enforced; missing evidence=null.",
+    "compatibility": "Model, processor, normalization, observations/actions, native chunk protocol and bundle artifacts are compatible with recorded backend contract; missing checks=null.",
+    "critical_old_preserved": "old_milk and old_drawer each established at seed3; candidate succeeds on both, never below matched current or fixed anchor.",
+    "reference_coverage": "All four release slots require independent native/terminal results and necessary L0, technical, complete cost and critical_progress evidence. Auxiliary training collection alone is not a permanent release prerequisite; unknown/invalid/missing necessary evidence => inconclusive.",
+    "resource_limits": "No per-attempt or aggregate authorized resource cap exceeded; missing full-cost ledger=null.",
+    "critical_progress": "No confirmed duplicate completion submission, action using invalidated historical coordinates, or advance that requires an unverified holding/goal fact. Only preconditions actually consumed by executed skills are required; reference evidence for those transitions must be available or this check=null. Optional released/settled labels are not new native success conditions."
+  },
+  "outcomes": {
+    "labels": [
+      "success",
+      "failure",
+      "unknown"
+    ],
+    "validity": [
+      "valid",
+      "invalid"
+    ],
+    "denominator": "All preassigned task-seed slots, including refused, unstarted due to batch stop, timeout, unknown and invalid. One slot remains one denominator entry; no replacement or post-outcome exclusion.",
+    "success": "Independent native benchmark success=true, linked episode/bundle/protocol; Planner finish, tool heuristic or terminated alone cannot establish success.",
+    "failure": "Independent native success=false after authorized attempt ends or budget is exhausted with complete terminal evidence.",
+    "unknown": "Independent result absent/conflicting, or stopped slot not run; never infer success from no alarm.",
+    "invalid": "Technical setup/protocol/data failure flag, independent of outcome; score contribution zero and counts in all-slot denominator.",
+    "score_contribution": "1 only for success AND valid; all other slots 0.",
+    "gate_missing_fraction": "union(outcome=unknown, validity=invalid, missing slot) / all assigned slots; must equal zero for accept in each of candidate/current/anchor.",
+    "process_labels": [
+      "native_success",
+      "native_terminated",
+      "native_truncated",
+      "planner_finish",
+      "tool_heuristic",
+      "released",
+      "settled",
+      "manual_takeover"
+    ],
+    "native_definition": "Release/settle labels are process evidence only; do not silently strengthen or replace the native benchmark goal."
+  },
+  "state_evaluation": {
+    "states": [
+      "holding_target",
+      "target_in_goal",
+      "drawer_open",
+      "subgoal_completed"
+    ],
+    "sampling": "At initial observation, after each state-changing tool, each handoff/recovery, and terminal observation; only task-applicable states are expected and the set is fixed before the attempt.",
+    "reference_coverage": "n_with_independent_reference/n_expected",
+    "determinate_coverage": "n_nonunknown_with_reference/n_with_independent_reference",
+    "conditional_accuracy": "n_correct_nonunknown/n_nonunknown_with_reference",
+    "all_unknown_fraction": "n_system_unknown/n_expected",
+    "report_counts": [
+      "n_expected",
+      "n_with_independent_reference",
+      "n_nonunknown_with_reference",
+      "n_correct_nonunknown",
+      "n_system_unknown",
+      "n_wrong_progress",
+      "n_duplicate_execution"
+    ],
+    "zero_denominator": "null, never 0 or 1; required evidence missing leads inconclusive",
+    "privileged_state": "Evaluator-only reference does not enter runtime policy. Unknown ground truth remains missing reference; system statements do not supply the reference."
+  },
+  "recovery": {
+    "max_local_recoveries_per_attempt": 1,
+    "shares_original_remaining_budget": true,
+    "record": [
+      "trigger_event",
+      "remaining_budget_at_trigger",
+      "recovery_action",
+      "handoff_bundle_and_skill",
+      "continuation_outcome",
+      "recovery_cost",
+      "continuation_cost"
+    ],
+    "reset_retries_per_assignment": 0,
+    "initial_setup_reset_cost_included": true,
+    "mid_attempt_reset": "Terminates original attempt, record linked new attempt if separately authorized. No reset retry authorized by this pilot. Never upgrade original slot to success from retry.",
+    "report_all_assignments": true,
+    "causal_claim": "Triggered recovery samples alone do not identify recovery benefit. A future causal comparison needs preallocated independent controls under same budget."
+  },
+  "gate": {
+    "comparators": [
+      "current",
+      "fixed_anchor"
+    ],
+    "required_result_role": "release",
+    "required_result_evidence_level": "simulation",
+    "required_result_links": [
+      "bundle_id",
+      "protocol_id",
+      "benchmark_id",
+      "candidate_id for candidate result"
+    ],
+    "accept": "All three results complete/valid, all named hard constraints true, dynamic authorization present, J(candidate)-J(current)>=0.02, J(candidate)>=J(anchor)-0.02.",
+    "reject": "Known hard-constraint false, or complete comparable evidence fails fixed numerical thresholds.",
+    "inconclusive": "Unknown/invalid/missing results, null constraints, unresolved compatibility, missing authorization or insufficient evidence. Keep current effective bundle.",
+    "priority": "Known hard violation rejects; otherwise missing evidence/authorization is inconclusive before comparing numeric score.",
+    "statistical_status": "One seed/task gives finite engineering coverage only; no efficacy or H3 inference.",
+    "anchor_policy": "Initial full immutable RunBundle and independent release matrix become fixed anchor; first current may reuse that same result. Later current updates cannot replace anchor. Existing smoke is not anchor acceptance.",
+    "activation": "Task boundary only, separate from evaluation; reject/inconclusive cannot change effective bundle.",
+    "engineering_threshold_resolution": "Each old-task slot changes J by .125, controlled by .35, base by .40; min_gain=.02 is a fixed engineering rule, no confidence claim."
+  },
+  "budget": {
+    "authorized_now": {
+      "simulation_episodes": 1,
+      "gpu_seconds": 900,
+      "llm_requests": 21,
+      "training_steps": 0,
+      "downloads_bytes": 0,
+      "hardware_actions": 0
+    },
+    "per_attempt_proposal": {
+      "full_job_wall_seconds": 900,
+      "planner_timeout_seconds": 600,
+      "max_turns": 20,
+      "max_episode_steps": 2000,
+      "tool_calls": 60,
+      "llm_input_tokens_including_cached": 1000000,
+      "llm_output_tokens": 8000,
+      "artifact_bytes": 1073741824,
+      "local_recoveries": 1,
+      "reset_retries": 0,
+      "model_requests": 20,
+      "token_limits_enforced": false
+    },
+    "first_release_cycle_proposal": {
+      "candidate_limit": 1,
+      "bundles_measured_at_most": 2,
+      "assignments_per_bundle": 4,
+      "simulation_episodes_at_most": 8,
+      "full_job_wall_seconds": 7200,
+      "gpu_device_seconds_at_most": 7200,
+      "llm_input_tokens_including_cached": 8000000,
+      "llm_output_tokens": 64000,
+      "artifact_bytes": 8589934592,
+      "concurrent_jobs": 1,
+      "training_steps": 0,
+      "downloads_bytes": 0,
+      "hardware_actions": 0,
+      "currency_budget": "Future comparison only, not authorized. Tokens observed only; no token or money hard-cap commitment.",
+      "authorized": false,
+      "model_requests": 160,
+      "tool_calls": 480
+    },
+    "stop_rule": "Before every model HTTP forwarding reserve one request; at20 reject before upstream. At wall/tool/total env-step/GPU-envelope/storage threshold stop and retain full preassigned slots. Tokens observed only by explicit user authorization, no token spend guarantee.",
+    "ledger": [
+      "process_start_to_final_exit_wall_seconds",
+      "gpu_device_seconds",
+      "llm_input_tokens",
+      "llm_cached_input_tokens_subset",
+      "llm_output_tokens",
+      "training_seconds",
+      "failed_candidates",
+      "audit_seconds",
+      "evaluation_seconds",
+      "reset_seconds",
+      "recovery_seconds",
+      "manual_seconds",
+      "tool_calls",
+      "environment_steps",
+      "artifact_bytes"
+    ],
+    "wall_clock": "Use run.log or supervisor process launch-to-final-cleanup timestamps; include startup/loading/shutdown and failed attempts; never use transcript.elapsed_s as full job time.",
+    "token_policy": "observed_only; input/cached/output retained, not a hard token/spend cap",
+    "authorization_scope": "bounded-5a-research-development-only"
+  },
+  "next_step_proposal": {
+    "authorized": false,
+    "purpose": "Future steps require separate authorization; current bounded pilot uses new stage spec and concrete permits.",
+    "task": "position_swap_salad",
+    "suite": "libero_object_swap",
+    "task_id": 2,
+    "seeds": [
+      1
+    ],
+    "bundles": [
+      "initial-medium-5a-frozen-20261112-pilot02"
+    ],
+    "episodes": 1,
+    "per_attempt_budget_reference": "budget.per_attempt_proposal",
+    "counts_as_formal_release_result": false,
+    "launch_condition": "No automatic dispatch; only the current unique trial is eligible via new permit.",
+    "completion": "Raw native success/terminated/truncated and separate process labels persisted with bundle/protocol; complete start-to-cleanup wall clock and token ledger; missing outcome remains unknown. Pilot supports that scene only."
+  },
+  "prior_evidence": {
+    "reference": "项目文档/04_实施路线与待决事项.md §1.1–1.2; RPent/logs/smoke-20261109-222602/run.log",
+    "transcript_elapsed_s": 209.3,
+    "llm_input_tokens": 699228,
+    "llm_cached_input_tokens_subset": 639488,
+    "llm_output_tokens": 2317,
+    "vla_ready_seconds": 80.3,
+    "full_job_wall_seconds": "Not inferred from transcript; historical run.log begins 22:26:03 and last recorded line 22:31:04, 301 s observed log span; final service cleanup coverage must be confirmed before calling it complete wall clock.",
+    "use": "Historical low only: installation/interface/budget reference, never medium ability baseline or anchor.",
+    "reasoning_effort": "low"
+  },
+  "supersedes": "pilot01 GPU occupancy stop; new authorized identities only, no old jobs or permits resumed",
+  "revision_reason": "User-approved four-slot layout and one bounded Research/development pilot; no release dispatch authorized",
+  "authorization_ref": "/home/xzh/RSI-Agent-VLA/artifacts/bounded-20261112-5a-pilot-02/authorization.json",
+  "governance": "Only one Research and its unique hint trial development allowed by concrete new permits; no release, qualification, training, activation, inheritance, rollback, hardware, dependencies or old queues.",
+  "initial_requirements": {
+    "metric_minima": {
+      "success_base": 1,
+      "success_old": 1
+    },
+    "required_old_tasks": [
+      "old_milk",
+      "old_drawer"
+    ],
+    "meaning": "base and both critical old skills established; controlled result fully known, not necessarily success; no self-relative gain required"
+  },
+  "draft_comparison": {
+    "status": "layout_frozen_efficiency_branch_not_approved",
+    "ability": {
+      "J_min_gain": 0.02,
+      "anchor_J_max_drop": 0.02
+    },
+    "efficiency": {
+      "task_J_max_drop_vs_current_and_anchor": 0.02,
+      "full_wall_relative_reduction_suggestion": 0.1,
+      "requires_predeclared_noise_and_repetition": true,
+      "implemented_in_current_gate": false,
+      "enabled": false
+    },
+    "noise_rule_recommendation": "one complete pair is exploratory; reliable pure wall efficiency needs >=2 complete paired repetitions plus consistent direction; do not authorize repeats from this draft",
+    "success_ceiling": "if baseline J=1, positive success gain unavailable; efficiency must use separately approved implemented common branch, otherwise inconclusive/reject by current Gate",
+    "noncritical_tradeoff": "common J=.40 base+.35 controlled+.25 macro old; only predeclared critical constraints veto",
+    "paired_conditions": [
+      "same task/init seed and mapping",
+      "same model/processor/native 5-step chunk contract",
+      "same collection/version and budgets",
+      "serial cold-start policy; report actual cache/load conditions",
+      "same nonintervention input version; candidate changes only handoff boolean"
+    ],
+    "unknown_invalid": "do not drop denominator, infer failure, choose new seed or automatically retry",
+    "randomness": "environment seed fixed; model/provider/sampling/cache/runtime scheduling not proven deterministic"
+  },
+  "release_authorized": false,
+  "authorization_scope": "bounded-5a-research-development-only",
+  "allowed_runtime_splits": [
+    "development"
+  ]
+}

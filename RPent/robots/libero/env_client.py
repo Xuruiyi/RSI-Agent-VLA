@@ -130,6 +130,15 @@ class LiberoEnvClient(BaseEnvClient):
         self.check_done(result[2], result[3])
         return result
 
+    def rsi_skill_observation(self, *, evidence: dict) -> dict:
+        """Request a private environment record, receiving only its sequence."""
+        receipt = self._client.call(
+            "env.rsi_skill_observation",
+            kwargs={"evidence": evidence},
+            timeout_s=self._TIMEOUT_S["default"],
+        )
+        return {key: receipt[key] for key in ("source_sequence", "status")}
+
     def render_camera(
         self,
         camera_name: str = "agentview",

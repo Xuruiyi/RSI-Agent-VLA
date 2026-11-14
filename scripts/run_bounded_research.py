@@ -39,8 +39,12 @@ def main():
         json.loads(Path(p["protocol"]).read_text()),
         domain_policy=p["domain_policy"],
     )
-    adapter = BoundedResearchAdapter(model="gpt-6.1-sol", reasoning_effort="medium")
     transport = store.get("bounded_transports", p["request_id"])
+    adapter = (
+        BoundedResearchAdapter(reasoning_effort=unpack(transport)["reasoning_effort"])
+        if args.reconcile
+        else BoundedResearchAdapter()
+    )
     if args.reconcile:
         print(
             json.dumps(

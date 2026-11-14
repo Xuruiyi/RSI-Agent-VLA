@@ -20,7 +20,7 @@ class BoundedResponseTest(unittest.TestCase):
             BoundedResearchAdapter.operators
         )
         self.adapter = BoundedResearchAdapter(
-            model="gpt-6.1-sol", reasoning_effort="medium"
+            model="gpt-6.1-sol", reasoning_effort="high"
         )
         self.adapter.prepare_request(
             self.tools,
@@ -279,8 +279,25 @@ class RuntimeConsumptionTest(unittest.TestCase):
             baseline_result="current",
             anchor_result="anchor",
         )
+        # Qualify the starting version independently before it can be replaced.
+        # Acceptance of the candidate does not establish baseline qualification.
+        with self.assertRaisesRegex(ValueError, "independent qualification"):
+            release.activate("accept", safe_point="task_boundary", queues_empty=True)
+        release.qualify_initial("current-qualified", result_id="current")
+        release.establish_initial(
+            "current-qualified", safe_point="task_boundary", queues_empty=True
+        )
+        # The effective baseline changed from bootstrap to qualified; bind the
+        # decision to that current state before activation.
+        release.evaluate(
+            "qualified-accept",
+            "runtime-candidate",
+            candidate_result="new",
+            baseline_result="current",
+            anchor_result="anchor",
+        )
         old_plan = fixture.plan()
-        release.activate("accept", safe_point="task_boundary", queues_empty=True)
+        release.activate("qualified-accept", safe_point="task_boundary", queues_empty=True)
         selected, _ = release.deployment_bundle(
             scope="offline", safe_point="task_boundary"
         )

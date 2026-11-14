@@ -256,9 +256,9 @@ toolkit 模块通常包含四部分：
 
 机器人特有的 CLI 参数通过两个钩子接入 ``rpent/cli/main.py`` 的解析流程，并参与最终的 argparse 解析：
 
-**``_add_cli_args(parser, use_dashboard) -> None``。** 将机器人参数注册到 main.py 已创建的共享 parser。``use_dashboard`` 决定原本必填的参数是否保持可选。每个 Dashboard TaskRun 会在 ``parse_config`` 调用前，由机器人 Dashboard spec 定义的任务命令提供其声明的字段。main.py 会在 ``parser.parse_args()`` 之前调用该钩子，因此 argparse 的 usage 和错误信息也会包含机器人参数。
+``_add_cli_args(parser, use_dashboard) -> None``。 将机器人参数注册到 main.py 已创建的共享 parser。``use_dashboard`` 决定原本必填的参数是否保持可选。每个 Dashboard TaskRun 会在 ``parse_config`` 调用前，由机器人 Dashboard spec 定义的任务命令提供其声明的字段。main.py 会在 ``parser.parse_args()`` 之前调用该钩子，因此 argparse 的 usage 和错误信息也会包含机器人参数。
 
-**``_parse_config(args) -> RunConfig``。** 普通 CLI 模式下，该钩子在 ``parser.parse_args()`` 后调用；Dashboard 模式下，每个 TaskRun 会先把请求字段写入任务参数，再调用该钩子。该钩子校验这些字段并返回
+``_parse_config(args) -> RunConfig``。 普通 CLI 模式下，该钩子在 ``parser.parse_args()`` 后调用；Dashboard 模式下，每个 TaskRun 会先把请求字段写入任务参数，再调用该钩子。该钩子校验这些字段并返回
 :class:`~rpent.robots.RunConfig`：
 
 - ``recipe_tag`` —— 单次运行的机器人标签，用于 transcript 文件名和 recipe 路径（LIBERO 使用 ``f"{suite.replace('libero_', '')}_t{task}_s{seed}"``）。
@@ -303,7 +303,7 @@ endpoint（``--env-endpoint``、``--am-endpoint``，以及 LIBERO 的 ``--sam3-e
 可选的运行结果 finalizer
 ------------------------
 
-``RobotSpec.finalize_run`` 是面向所有机器人、与具体 benchmark 无关的通用运行结束钩子。RoboCasa 是当前使用方，用它记录单 cell 评测结果，供后续结果统计和聚合。任何需要发布机器可读评测产物的机器人都可以注册该钩子。其默认值为 ``None``，不会改变 runner 行为。配置该钩子后，普通终端 runner 会在关闭 toolkit 前读取 ``toolkit.solved()``，完成运行时清理后再把结构化的 ``RunFinalizationContext`` 传给钩子。产物 schema 与文件名由钩子负责，RPent 只定义生命周期边界。
+``RobotSpec.finalize_run`` 是面向所有机器人、与具体 benchmark 无关的通用运行结束钩子。LIBERO、RoboCasa、RoboDojo 和 YAM 用它输出评测结果。任何需要发布机器可读评测产物的机器人都可以注册该钩子。其默认值为 ``None``，不会改变 runner 行为。配置该钩子后，普通终端 runner 会在关闭 toolkit 前读取 ``toolkit.solved()``，完成运行时清理后再把结构化的 ``RunFinalizationContext`` 传给钩子。产物 schema 与文件名由钩子负责，RPent 只定义生命周期边界。
 
 JSON 产物应使用 ``write_json_atomic``，避免中断写入留下不完整结果：
 

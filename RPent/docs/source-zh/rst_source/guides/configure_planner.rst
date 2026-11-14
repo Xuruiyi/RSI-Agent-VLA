@@ -28,10 +28,8 @@ RPent 通过一个 CLI 参数选择 Agentic Planner 的后端：
        Streamable HTTP MCP 服务，把 toolkit 接入 Codex。
      - 通过 Codex SDK 运行任务，复用已有的 Codex 认证或配置独立 API。
    * - ``flash``
-     - **Flash Mode**，仅用于评测。重放 memory 中保存的成功执行计划，并对每个路点
-       的锚点重新定位，使方案能跟随移动过的物体。参见
-       :doc:`flash`。
-     - 想在新布局上低成本地重跑一个已知可行的方案，无需 LLM 在线规划；仍需要感知和 VLA 服务。
+     - 根据当前场景重新定位锚点并重放已有计划，支持 :doc:`LIBERO Flash Mode <flash>` 和 :ref:`Franka 任务卡 <franka-flash>`。
+     - 无需在线任务规划即可重复经审核的动作序列；所需感知与动作服务取决于平台。
 
 .. _planner-direct-actions:
 
@@ -117,10 +115,10 @@ Claude Code 可以连接兼容 Anthropic Messages API 的本地模型服务。�
 
 .. _planner-codex:
 
-``codex`` planner
+``codex`` 规划器
 ------------------
 
-``--planner codex`` 使用 OpenAI Codex Python SDK。每次运行时，RPent 会在当前进程的后台线程中启动本地 Streamable HTTP MCP 服务，Codex 通过该服务调用同一个 toolkit；无需预先启动 ``scripts/codex_proxy/``。
+``--planner codex`` 使用 OpenAI Codex Python SDK。每次运行时，RPent 会在当前进程的后台线程中启动本地 Streamable HTTP MCP 服务，Codex 通过该服务调用同一个 toolkit。
 
 Codex 规划会话不会自动加载仓库的 ``AGENTS.md`` 和 ``.agents/skills/`` 中的开发 skills。工作目录仍为仓库根目录，机器人指南和 memory 仍可通过已有工具读取。
 
@@ -245,6 +243,8 @@ RPent 的 ``--model`` 必须与 vLLM 的 ``--served-model-name`` 保持一致。
 Claude 交互模式下，每次新增用户输入都会获得新的轮数预算，``turns_used`` 则继续累计。详见 `Claude 的轮数限制说明 <https://code.claude.com/docs/en/agent-sdk/agent-loop#turns-and-budget>`_。
 
 ``flash`` 直接重放计划，不运行 LLM 循环，因此不使用这一预算，报告的 ``turns_used`` 为 ``0``。
+
+``--reasoning-effort`` 在 API 中默认为 ``high``，在 Claude Code/Codex 中默认为 ``none``。历史 LIBERO-PRO Long 评测关闭推理后，平均耗时从约 13.2 分钟降至 7.9 分钟，降幅约 40%；这一测量对应当时的评测配置。当前成绩见 :doc:`../leaderboard/time-token-costs`。
 
 其他限制的作用范围不同：
 

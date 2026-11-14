@@ -546,6 +546,32 @@ def _connect_molmo_server(
     return None, make_rpc_client(args.molmo_endpoint)
 
 
+def flywheel_configuration(args: argparse.Namespace) -> dict[str, Any]:
+    """Bind collection before services start; no observation or extra RPC is needed."""
+    from rpent.session.runtime import runtime_context
+
+    context = runtime_context() or {}
+    collection = context.get("collection", {})
+    if (
+        collection
+        and Path(args.flywheel_root or "").resolve()
+        != Path(collection["root"]).resolve()
+    ):
+        raise ValueError("collection root differs from supervised runtime context")
+    return {
+        **collection,
+        "identity": {
+            key: context.get(key)
+            for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+        },
+        "information_scope": context.get("information_scope", "unspecified"),
+        "root": args.flywheel_root or str(get_repo_root() / "datacollection"),
+        "suite": args.suite,
+        "task_id": args.task,
+        "seed": args.seed,
+    }
+
+
 def _init_runtime(
     args: argparse.Namespace,
     output_dir: Path,
@@ -557,6 +583,9 @@ def _init_runtime(
     from rpent.robots.components.molmo_client import MolmoClient
     from rpent.robots.components.sam3_client import Sam3Client
 
+    collection_config = (
+        flywheel_configuration(args) if args.collect_flywheel_data else None
+    )
     am = select_am(args, "libero")
     wam = am if am.is_wam else None
     policy_kind = "wam" if wam else "vla"
@@ -620,11 +649,6 @@ def _init_runtime(
         runtime_kwargs.update(component_kwargs)
 
     if args.collect_flywheel_data and "env" in selected:
-        runtime_kwargs["flywheel_config"] = {
-            "root": args.flywheel_root or str(get_repo_root() / "datacollection"),
-            "suite": args.suite,
-            "task_id": args.task,
-            "seed": args.seed,
-        }
+        runtime_kwargs["flywheel_config"] = collection_config
 
     return list(owned_daemons.values()), runtime_kwargs

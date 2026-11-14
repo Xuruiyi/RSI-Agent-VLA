@@ -1,0 +1,16 @@
+{
+  "domain": "libero_tabletop",
+  "allowed_goal_kinds": [],
+  "policy_ref": "/home/xzh/RSI-Agent-VLA/artifacts/bounded-20261112-5a-pilot-01/authorization.json",
+  "rule_operators": [
+    "planner_segment_handoff_hint"
+  ],
+  "handoff_scope_approved": true,
+  "historical_development_bundle_ids": [
+    "initial-medium-v9-resultfix"
+  ],
+  "historical_protocol_refs": {
+    "rsi-libero-pro-pilot-v9-bounded-vla-tools60": "/home/xzh/RSI-Agent-VLA/config/pilot_v9.json"
+  },
+  "status": "frozen_bounded_research_only"
+}

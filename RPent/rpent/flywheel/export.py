@@ -20,13 +20,14 @@ import json
 import os
 import re
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from rpent.flywheel.episode import validate_episode
+from rpent.flywheel.episode import read_episode_arrays, validate_episode
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -47,7 +48,11 @@ def _features(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _successful_episodes(
-    paths: Iterable[Path], *, spec: dict[str, Any], expected_metadata: dict[str, Any]
+    paths: Iterable[Path],
+    *,
+    spec: dict[str, Any],
+    expected_metadata: dict[str, Any],
+    purpose: str = "demonstration",
 ) -> list[tuple[Path, dict[str, Any]]]:
     episodes = []
     for path in paths:
@@ -56,7 +61,14 @@ def _successful_episodes(
         metadata = validate_episode(path, spec=spec)
         if any(metadata[key] != value for key, value in expected_metadata.items()):
             raise ValueError(f"episode metadata does not match its directory: {path}")
-        if metadata["is_success"]:
+        if (
+            metadata.get("source_kind") == "autonomous_execution"
+            and purpose != "diagnostic"
+        ):
+            raise ValueError(
+                "autonomous execution is preserved for diagnosis; demonstration training admission required"
+            )
+        if purpose == "diagnostic" or metadata["is_success"]:
             episodes.append((path, metadata))
     if not episodes:
         raise ValueError(f"no successful episodes found for {expected_metadata}")
@@ -71,14 +83,17 @@ def export_lerobot(
     repo_id_prefix: str,
     output_root: Path | str,
     dataset_id: str | None = None,
+    purpose: str = "demonstration",
 ) -> dict[str, Any]:
     """Validate selected episodes and export their successful training prefixes."""
+    if purpose not in {"demonstration", "diagnostic"}:
+        raise ValueError("unknown export purpose")
     dataset_id = dataset_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     if not _NAME.fullmatch(dataset_id):
         raise ValueError(f"invalid dataset ID: {dataset_id!r}")
 
     episodes = _successful_episodes(
-        episode_paths, spec=spec, expected_metadata=expected_metadata
+        episode_paths, spec=spec, expected_metadata=expected_metadata, purpose=purpose
     )
     languages = {metadata["task_language"] for _, metadata in episodes}
     if len(languages) != 1:
@@ -110,8 +125,12 @@ def export_lerobot(
     frame_count = 0
     source_ids = []
     for path, metadata in episodes:
-        count = metadata["training_step_count"]
-        with np.load(path / "transitions.npz", allow_pickle=False) as data:
+        count = (
+            metadata["step_count"]
+            if purpose == "diagnostic"
+            else metadata["training_step_count"]
+        )
+        with _episode_data(path) as data:
             for index in range(count):
                 dataset.add_frame(
                     {
@@ -133,6 +152,14 @@ def export_lerobot(
         **expected_metadata,
         "task_language": language,
         "source_episode_ids": source_ids,
+        "source_episode_paths": [str(path) for path, _ in episodes],
+        "purpose": purpose,
+        "source_kind": "autonomous_execution"
+        if any(m.get("source_kind") == "autonomous_execution" for _, m in episodes)
+        else "legacy_unspecified",
+        "training_admission": "not_admitted"
+        if purpose == "diagnostic"
+        else "requires_separate_demonstration_manifest",
         "episode_count": len(source_ids),
         "frame_count": frame_count,
     }
@@ -141,3 +168,12 @@ def export_lerobot(
     )
     os.replace(partial, destination)
     return {"dataset_path": str(destination), **manifest}
+
+
+@contextmanager
+def _episode_data(path: Path):
+    if (path / "transitions.npz").exists():
+        with np.load(path / "transitions.npz", allow_pickle=False) as data:
+            yield data
+    else:
+        yield read_episode_arrays(path)

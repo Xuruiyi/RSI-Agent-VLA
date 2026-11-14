@@ -6,6 +6,9 @@ and stops these services and the environment with each run. Configure external
 endpoints when services live on different hosts or are reused across tasks.
 For WAM worker deployment, see :ref:`action-model-deployment`.
 
+GPU IDs below are examples. Select compatible devices according to available
+memory and load on each host when starting services.
+
 Three flags set the endpoints: ``--env-endpoint`` for the LIBERO
 environment, ``--am-endpoint`` for the selected action model, and ``--sam3-endpoint``
 for SAM3. Each takes ``[protocol://]HOST:PORT`` — HTTP when the protocol is

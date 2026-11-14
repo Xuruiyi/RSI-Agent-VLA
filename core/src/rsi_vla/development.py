@@ -10,7 +10,7 @@ from .evidence import EventLedger
 IMPORT_VERSION = "rpent-development-v2-action-origin"
 
 
-def import_development(store, protocol, run_dir, *, result_id):
+def import_development(store, protocol, run_dir, *, result_id, revision_id=None, audit_path=None):
     """Use a versioned store for changed derivations; equal replay is idempotent."""
     root = Path(run_dir).resolve()
 
@@ -61,7 +61,7 @@ def import_development(store, protocol, run_dir, *, result_id):
     if cost["identity"] != identity:
         raise ValueError("cost identity mismatch")
     # Preserve null/missing cost detail in L0 references; use the existing measured cost vector.
-    audit = read("independent-audit.json")
+    audit = json.loads(Path(audit_path).read_text()) if audit_path else read("independent-audit.json")
     if audit["identity"] != identity:
         raise ValueError("audit identity mismatch")
     outcome = events[-1].outcome
@@ -78,7 +78,7 @@ def import_development(store, protocol, run_dir, *, result_id):
         IMPORT_VERSION,
     )
     refs = [
-        str(root / name)
+        str(Path(audit_path).resolve() if name == "independent-audit.json" and audit_path else root / name)
         for name in (
             "runtime_context.json",
             "independent_result.json",
@@ -91,6 +91,10 @@ def import_development(store, protocol, run_dir, *, result_id):
         )
     ]
     refs.append(str(transcripts[0]))
+    if audit_path:
+        refs.append(str(audit_path))
+    if (root / "dataset_manifest.json").exists():
+        refs.append(str(root / "dataset_manifest.json"))
     view_ref = str(store.path("evidence_views", view_id).resolve())
     record = ExperimentResult(
         result_id,
@@ -138,10 +142,11 @@ def import_development(store, protocol, run_dir, *, result_id):
         "cost_booking": "historical_only_no_charge",
     }
     # A run has one derivation per store. Changed classification uses a new versioned store.
-    store.put("development_imports", identity["run_id"], receipt)
+    store.put("development_import_revisions" if revision_id else "development_imports",
+              identity["run_id"] + "-" + revision_id if revision_id else identity["run_id"],
+              {**receipt, "revision_id": revision_id} if revision_id else receipt)
     ledger = EventLedger(store)
-    for event in events:
-        ledger.append(event)
+    ledger.append_many(events)
     store.put("evidence_views", view_id, view)
     store.save_development_result(record)
     return record

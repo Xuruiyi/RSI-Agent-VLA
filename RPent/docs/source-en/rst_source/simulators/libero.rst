@@ -214,6 +214,8 @@ to four chunks with fresh observations. The worker's ``chunk_size`` metadata
 declares the number of actions per chunk. A prompt override applies to
 that call only. Chunk budgets do not specify where to stop inside a chunk.
 
+.. _libero-results:
+
 View Results
 ------------
 
@@ -224,14 +226,17 @@ Inspect the final state with ``view_env_state(step=-1)``. Its top-level ``termin
 ``result.json`` records the latest episode's native ``terminated`` and
 ``truncated`` flags separately from ``planner_finish`` and ``tool_successes``.
 LIBERO sets ``terminated`` from its full-task success predicate; RLinf sets
-``truncated`` at the episode step limit. ``benchmark_success`` is true on
-native success, false on truncation without success, and null while active
-or when native evidence is missing. ``benchmark_status`` distinguishes these
-cases. Tool success can describe a pick heuristic. Extra process labels,
-including release and settling, remain null until independently measured.
-The transcript's ``environment_success`` retains the toolkit's session-level
-``solved()`` verdict; it does not classify an unfinished episode as a benchmark
-failure. Errors are recorded independently of native success.
+``truncated`` at the episode step limit. ``benchmark_success`` is true on native
+success and false on truncation without success. A normally closed attempt or
+verified budget stop can also use the environment service's confirmed last native
+result after tools and services drain. An active attempt or missing/conflicting
+closure evidence remains null; ``benchmark_status`` and ``termination_reason``
+explain the result. Read technical validity separately from native success.
+
+Tool success can describe a pick heuristic. Release and settling labels remain
+null until independently measured. The transcript's ``environment_success``
+retains the toolkit's session-level ``solved()`` verdict; Planner ``finish``
+does not supply the native result.
 
 For journal-enabled runs, ``execution_health`` links unresolved inference and
 action RPC faults to their episode and execution segment. Normal Planner

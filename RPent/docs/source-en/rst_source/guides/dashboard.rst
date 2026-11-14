@@ -71,10 +71,12 @@ reused by the Session. Submit a new ``/rpent-task`` to start or switch tasks;
 during a run, normal messages steer the agent and Esc requests an interruption.
 Press Ctrl+C in the terminal to stop the Session.
 
-``--dashboard`` cannot be combined with ``--interactive`` or
-``--env-endpoint``. External ``--am-endpoint`` and ``--sam3-endpoint``
-services remain supported. Use ``--dashboard-language zh-cn`` for the
-Chinese UI.
+``--dashboard`` cannot be combined with ``--tui``. Simulator sessions own a
+fresh environment per TaskRun and reject ``--env-endpoint``. YAM requires an
+external environment; dual-Franka also supports one with operator controls.
+Follow the corresponding robot guide for those workflows. External
+``--am-endpoint`` and ``--sam3-endpoint`` remain available where supported.
+Use ``--dashboard-language zh-cn`` for the Chinese UI.
 
 Inspect Results and End the Session
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -87,11 +87,12 @@ Pi0.5 用于执行机器人动作，SAM3 用于定位图像中的物体。SAM3 �
 5. 查看结果
 ---------------
 
+- ``result.json``：查看原生任务结果、收尾原因与运行错误。
 - ``episode.mp4``：回看机器人操作过程。
 - ``transcript_*.json``：查看规划器对话、工具调用和结束状态。
 - ``run.log``：查看运行日志和错误。
 
-LIBERO 的任务成功以最终环境状态的顶层 ``terminated`` 为准，可通过 ``view_env_state(step=-1)`` 的工具结果查看。规划器在 ``finish`` 中声明成功，不等于环境判定成功。
+查看 ``result.json`` 中的原生结果 ``benchmark_success``、``benchmark_status`` 和运行错误。最终环境状态的 ``terminated`` 记录原生任务成功，可通过 ``view_env_state(step=-1)`` 查看。Planner 的 ``finish`` 不能单独证明成功；证据缺失或中断时可能保持未知。收尾与有效性规则见 :doc:`../simulators/libero`。
 
 默认目录命名、动作序列与逐步观测文件的说明见 :ref:`run-output-files`。
 

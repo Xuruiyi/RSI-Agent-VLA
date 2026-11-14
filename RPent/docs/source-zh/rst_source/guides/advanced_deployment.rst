@@ -3,6 +3,8 @@
 
 以下示例使用 LIBERO、Pi0.5 VLA 和 SAM3。默认情况下，RPent 随每次运行启动并关闭这些服务和环境。服务分布在不同主机或需要跨任务复用时，可配置外部 endpoint。WAM worker 的部署见 :ref:`action-model-deployment`。
 
+下方 GPU 编号仅作示例。启动服务时，按各主机的可用显存、负载和兼容性自主选择设备。
+
 三个参数分别设置对应服务的 endpoint：LIBERO 环境用 ``--env-endpoint``，所选动作模型用 ``--am-endpoint``，SAM3 用 ``--sam3-endpoint``。每个都取 ``[protocol://]HOST:PORT``，省略 protocol 时默认 HTTP，也可用 ``socket://`` 改走 socket RPC。
 
 Dashboard Session 不支持 ``--env-endpoint``，因为每个 TaskRun 都需要使用新的环境服务；Dashboard 模式仍可使用 ``--am-endpoint`` 和 ``--sam3-endpoint``。

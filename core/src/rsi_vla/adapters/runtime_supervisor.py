@@ -30,6 +30,12 @@ def _storage_bytes(root):
 
 def _live_group(pgid):
     """Return Linux group members; zombies cannot execute further work."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return []
+    except PermissionError:
+        pass  # The group exists; retain the normal membership check.
     members = []
     for path in Path('/proc').glob('[0-9]*/stat'):
         try:
@@ -48,18 +54,24 @@ def _stop_group(process, grace, interval, complete_deadline):
     except ProcessLookupError:
         pass
     deadline = min(time.monotonic() + grace, complete_deadline - interval)
-    while _live_group(pgid) and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
         process.poll()
+        remaining = _live_group(pgid)
+        if not remaining:
+            return []
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
+    process.poll()
     if _live_group(pgid):
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    # Reaping grandchildren belongs to their parent/init. Stop waiting at the
-    # complete-job deadline and preserve any unresolved process identities.
-    while _live_group(pgid) and time.monotonic() < complete_deadline:
+    # Reap before checking membership; an absent group needs no /proc scan.
+    while time.monotonic() < complete_deadline:
         process.poll()
+        remaining = _live_group(pgid)
+        if not remaining:
+            return []
         time.sleep(min(interval, max(0, complete_deadline - time.monotonic())))
     process.poll()
     return _live_group(pgid)
@@ -102,7 +114,11 @@ def supervise(command: list[str], *, context_path: str | Path,
     effective_grace = min(terminate_grace_s, complete_seconds / 3)
     effective_interval = min(poll_interval_s, complete_seconds / 10)
     stop_deadline = complete_deadline - effective_grace - effective_interval
-    peak_storage = _storage_bytes(output_dir)
+    from ..process_accounting import StorageMeter
+    storage_meter = StorageMeter(context.get('storage_write_roots', [output_dir]),
+        baseline=context.get('storage_baseline', {}))
+    storage_record = storage_meter.sample()
+    peak_storage = storage_record['cumulative_new_bytes_lower_bound']
     stop_reason = None
     cleanup_seconds = 0.0
     error = None
@@ -132,7 +148,10 @@ def supervise(command: list[str], *, context_path: str | Path,
                                            env=env, start_new_session=True)
                 while True:
                     elapsed = time.monotonic() - started
-                    peak_storage = max(peak_storage, _storage_bytes(output_dir))
+                    storage_record = storage_meter.sample()
+                    peak_storage = max(peak_storage, storage_record['cumulative_new_bytes_lower_bound'])
+                    from ..storage import atomic_json
+                    atomic_json(output_dir / 'storage-progress.json', storage_record)
                     if interrupted.is_set():
                         stop_reason = 'external_interruption'
                     elif time.monotonic() >= stop_deadline:
@@ -170,7 +189,8 @@ def supervise(command: list[str], *, context_path: str | Path,
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
     wall = time.monotonic() - started
-    peak_storage = max(peak_storage, _storage_bytes(output_dir))
+    storage_record = storage_meter.sample()
+    peak_storage = max(peak_storage, storage_record['cumulative_new_bytes_lower_bound'])
     report = {
         'schema_version': '1.0',
         **{key: context.get(key) for key in ('run_id', 'episode_id', 'bundle_id', 'protocol_id', 'profile_ref')},
@@ -180,7 +200,8 @@ def supervise(command: list[str], *, context_path: str | Path,
         'error': error,
         'wall_seconds': wall, 'wall_overshoot_seconds': max(0, wall - wall_limit),
         'storage_bytes': peak_storage, 'storage_overshoot_bytes': max(0, peak_storage - storage_limit),
-        'storage_measurement': 'sampled logical file bytes under output_dir; external paths excluded',
+        'storage_measurement': 'sampled logical growth across explicit output/scratch/log/cache domains',
+        'storage_accounting': storage_record,
         'poll_interval_s': effective_interval, 'terminate_grace_s': effective_grace,
         'complete_budget_seconds': complete_seconds,
         'cleanup_reserved_seconds': effective_grace + effective_interval,
@@ -194,8 +215,10 @@ def supervise(command: list[str], *, context_path: str | Path,
     # Include the report itself in the final retained byte count.
     for _ in range(3):
         report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
-        report['storage_bytes'] = max(report['storage_bytes'], _storage_bytes(output_dir))
+        report['storage_accounting'] = storage_meter.sample()
+        report['storage_bytes'] = max(report['storage_bytes'], report['storage_accounting']['cumulative_new_bytes_lower_bound'])
         report['storage_overshoot_bytes'] = max(0, report['storage_bytes'] - storage_limit)
+    report['storage_output_bytes_at_sample'] = _storage_bytes(output_dir)
     report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
     return report
 

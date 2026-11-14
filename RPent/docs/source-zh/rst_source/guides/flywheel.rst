@@ -79,3 +79,21 @@
      runner.logger.log_path=/path/to/new-training-output
 
 根据可用 GPU 设置配置中的资源分配和 batch size，并使用与所选模型和数据集相匹配的 checkpoint 及归一化设置。
+
+受监督的有界采集
+----------------
+
+launcher 可在 ``RSI_RUNTIME_CONTEXT.collection`` 中显式绑定
+``aligned-batches-v1``。``--flywheel-root`` 必须与该上下文一致，并位于
+受监督作业的输出目录内。此模式每批保存最多 25 个已返回转移，分别保存
+策略实际输入、动作候选及对齐日志。``collection.json`` 记录已提交批次、
+待反馈发送和最近一次记录的尾部。强杀可能丢失未提交尾部或在途转移；
+部分轨迹保留作诊断。策略图像保持原生策略方向，与标定后的 Planner
+图像分开。名义 20 Hz 不代表实测墙钟频率。
+
+schema-2 记录的来源为自主执行，训练准入为 ``not_admitted``。任务成功
+不能自动把这些动作变成专家监督。格式检查可用
+``export-lerobot --purpose diagnostic``，将全部已返回控制步（含失败轨迹）
+导出为 LeRobot；``meta/rpent_flywheel.json`` 保留用途、准入和来源引用。
+默认示范导出会拒绝自主 schema-2 数据。训练仍需独立、可追溯的示范
+manifest 及其准入检查。

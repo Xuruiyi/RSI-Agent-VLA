@@ -41,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument("--task", type=int, required=True)
     export.add_argument("--dataset-id")
     export.add_argument(
+        "--purpose", choices=("demonstration", "diagnostic"), default="demonstration"
+    )
+    export.add_argument(
         "--output-root",
         type=Path,
         help="parent directory for the exported LeRobot dataset",
@@ -65,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_root=args.output_root,
             ),
             dataset_id=args.dataset_id,
+            purpose=args.purpose,
             spec=LIBERO_SPEC,
         )
     print(json.dumps(result, indent=2, sort_keys=True))

@@ -61,9 +61,14 @@ def test_tool_events_reach_final_result_and_consumers(
         bundle_id=protocol["anchor_bundle_id"],
     )
     # The constructor's run_start must belong to the same fixture identity.
-    initial = json.loads(journal.events_path.read_text())
-    initial.update(journal.identity())
-    journal.events_path.write_text(json.dumps(initial) + "\n")
+    initial = [
+        json.loads(line) for line in journal.events_path.read_text().splitlines()
+    ]
+    for event in initial:
+        event.update(journal.identity())
+    journal.events_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in initial)
+    )
     root = journal.output_dir
     identity = journal.identity()
     task = {"suite": "libero_object_swap", "task": 2, "seed": 1}
@@ -402,3 +407,104 @@ def test_tool_events_reach_final_result_and_consumers(
             independent_result_path=root / "result.json",
         )[-1]
         assert raw_import.outcome == "unknown"
+
+
+def test_native_downstream_close_reaches_independent_audit_without_excusing_upstream_faults(
+    tmp_path, monkeypatch
+):
+    test_tool_events_reach_final_result_and_consumers(
+        tmp_path, monkeypatch, "success", "success", "completed"
+    )
+    root = tmp_path / "run"
+    context = json.loads((root / "runtime_context.json").read_text())
+    context["limits"].update(gpu_seconds=900, storage_bytes=1073741824)
+    (root / "runtime_context.json").write_text(json.dumps(context))
+    launch_plan = json.loads((root / "launch_plan.json").read_text())
+    launch_plan["context"] = context
+    (root / "launch_plan.json").write_text(json.dumps(launch_plan))
+    raw_bytes = (root / "result.json").read_bytes()
+    marker = json.loads((root / "native_completion.json").read_text())
+    events = [
+        json.loads(line)
+        for line in (root / "model_requests.jsonl").read_text().splitlines()
+    ]
+    events.extend(
+        [
+            {
+                "kind": "downstream_closed",
+                "request_number": 1,
+                "reason": "native_success",
+                "native_completion_sequence": marker["sequence"],
+                "native_completion_ref": str(root / "native_completion.json"),
+                "monotonic_seconds": marker["monotonic_ns"] / 1e9 + 0.01,
+            },
+            {"kind": "request_returned", "request_number": 1, "http_status": 200},
+        ]
+    )
+
+    def write_events(values):
+        (root / "model_requests.jsonl").write_text("\n".join(map(json.dumps, values)))
+
+    # This branch exercises downstream transport closure with complete SDK/L0
+    # coverage; a missing SDK stream is independently incomplete evidence.
+    l0 = [
+        json.loads(line)
+        for line in (root / "action_events.jsonl").read_text().splitlines()
+    ]
+    sdk = []
+    for call in (event for event in l0 if event["kind"] == "tool_call"):
+        end = next(
+            event
+            for event in l0
+            if event["kind"] == "tool_end"
+            and event["tool"] == call["tool"]
+            and event["sequence"] > call["sequence"]
+        )
+        item = {
+            "id": "fixture-" + str(call["sequence"]),
+            "type": "mcpToolCall",
+            "server": "rpent",
+            "tool": call["tool"],
+            "started_at_ms": call["utc_ns"] // 1000000 - 1,
+        }
+        sdk.append({"method": "item/started", "payload": {"item": item}})
+        sdk.append(
+            {
+                "method": "item/completed",
+                "payload": {
+                    "item": {
+                        **item,
+                        "status": end["status"],
+                        "completed_at_ms": end["utc_ns"] // 1000000 + 1,
+                    }
+                },
+            }
+        )
+    (root / "codex_fixture.stream.jsonl").write_text("\n".join(map(json.dumps, sdk)))
+    write_events(events)
+    assert finalize_runtime(context)["outcome"] == "success"
+    audit = inspect_attempt(root, require_vla=False)
+    assert audit["passed"], audit
+    assert audit["checks"]["complete_usage"] is True
+    assert audit["checks"]["model_transport"] is True
+    assert audit["costs"]["llm_input_tokens"] == 10
+    gate_path = root / "request_gate.json"
+    gate = json.loads(gate_path.read_text())
+    gate_path.write_text(json.dumps({**gate, "cleanup_complete": False}))
+    assert finalize_runtime(context)["outcome"] == "unknown"
+    assert not inspect_attempt(root, require_vla=False)["checks"]["model_transport"]
+    gate_path.write_text(json.dumps(gate))
+    write_events(events + [{"kind": "transport_error", "request_number": 1}])
+    assert finalize_runtime(context)["outcome"] == "unknown"
+    assert not inspect_attempt(root, require_vla=False)["passed"]
+    assert not inspect_attempt(root, result_path=root / "result.json")["checks"][
+        "model_transport"
+    ]
+    write_events(
+        [events[0], events[2], {"kind": "request_incomplete", "request_number": 1}]
+    )
+    assert finalize_runtime(context)["outcome"] == "unknown"
+    audit = inspect_attempt(root, require_vla=False)
+    assert audit["checks"]["complete_usage"] is False
+    assert audit["token_usage"]["input_tokens"] is None
+    assert (root / "result.json").read_bytes() == raw_bytes

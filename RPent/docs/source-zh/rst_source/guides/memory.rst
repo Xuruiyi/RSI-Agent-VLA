@@ -10,7 +10,7 @@
 使用公开记忆
 ------------------
 
-评测默认使用 ``--memory-profile hf``，从公开数据集 `RLinf/RPent-memory <https://huggingface.co/datasets/RLinf/RPent-memory>`_ 下载记忆。LIBERO 默认使用 ``--memory-version auto`` 按模型选择：
+LIBERO、RoboCasa 和 RoboTwin 的 VLA 评测默认使用 ``--memory-profile hf``，从公开数据集 `RLinf/RPent-memory <https://huggingface.co/datasets/RLinf/RPent-memory>`_ 下载记忆。LIBERO 默认使用 ``--memory-version auto`` 按模型选择：
 
 .. list-table:: LIBERO memory 版本
    :header-rows: 1
@@ -173,5 +173,5 @@ Astra 发布版合并了 Long 与 Spatial/Object/Goal 两批探索 memory；三�
 ------------
 
 - :doc:`../simulators/robocasa` 和 :doc:`../simulators/robotwin` 支持探索；任务参数、复位行为和记忆范围见各自页面。
-- :doc:`../real_world_robots/dual_franka` 探索需要现场操作员复位场景并确认结果，默认不自动合并记忆。先完成部署与自检，再开始探索。
+- :doc:`../real_world_robots/dual_franka` 和 :doc:`../real_world_robots/yam` 的探索需要操作员恢复场景并判定结果。默认自动合并记忆，可用 ``--no-auto-merge-memory`` 改为人工审核；先完成部署与运动检查。
 - :doc:`../real_world_robots/franka` 当前不支持探索模式。

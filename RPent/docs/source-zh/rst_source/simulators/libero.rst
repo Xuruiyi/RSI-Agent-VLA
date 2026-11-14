@@ -193,6 +193,8 @@ WAM 评测
 
 Fast-WAM 使用 ``--am-backend fast-wam`` 及其 worker 地址。LIBERO-Pro 需在 Pro 环境中选择 Pro suite 并指定 ``--libero-type pro``。WAM 不支持 LIBERO-Plus、Flash 和探索。WAM 必须启用本地记忆管理器和文件工具，默认目录按后端区分，语料允许为空；可通过 ``--memory-dir`` 指定兼容的本地语料，目前不支持 HF 记忆。``wam_act(prompt=None, max_chunks=1)`` 替换 Pi0.5 工具，每次执行 1 至 4 个 chunk，每个 chunk 前重新获取观测。每个 chunk 的动作数由 worker 的 ``chunk_size`` 元数据声明。prompt 仅覆盖本次调用，chunk 预算不指定在 chunk 内的哪一步停止。
 
+.. _libero-results:
+
 查看结果
 ------------
 
@@ -200,7 +202,9 @@ Fast-WAM 使用 ``--am-backend fast-wam`` 及其 worker 地址。LIBERO-Pro 需�
 
 通过 ``view_env_state(step=-1)`` 查看最终状态，顶层 ``terminated`` 表示环境是否判定成功。规划器调用 ``finish`` 只表示结束规划。实时观察方法见 :doc:`../guides/dashboard`。
 
-``result.json`` 将最后一次尝试的原生 ``terminated``、``truncated`` 与 ``planner_finish``、``tool_successes`` 分开记录。LIBERO 以整任务成功谓词生成 ``terminated``，RLinf 在达到步数上限时生成 ``truncated``。原生成功时 ``benchmark_success`` 为 true；未成功且达到上限时为 false；尝试仍在进行或缺少原生证据时为 null，由 ``benchmark_status`` 区分具体状态。工具的 success 可能只是抓取启发式判定。释放、落稳等额外过程标签在独立测量前保持 null。transcript 中的 ``environment_success`` 保留工具包会话级 ``solved()`` 判定，不将未结束的尝试归为 benchmark 失败。异常与原生成功结果分别记录。
+``result.json`` 将最后一次尝试的原生 ``terminated``、``truncated`` 与 ``planner_finish``、``tool_successes`` 分开记录。LIBERO 以整任务成功谓词生成 ``terminated``，RLinf 在步数上限生成 ``truncated``。原生成功时 ``benchmark_success`` 为 true；未成功且达到上限时为 false。正常结束或经验证的预算停止，在工具和服务收尾完成后，也可使用环境服务确认的最后原生结果。仍在进行、证据缺失或收尾冲突时保持 null，具体原因见 ``benchmark_status`` 和 ``termination_reason``。技术有效性与原生成功分别查看。
+
+工具的 success 可能只是抓取启发式判定。释放、落稳标签在独立测量前保持 null。transcript 的 ``environment_success`` 保留工具包会话级 ``solved()`` 判定；Planner 的 ``finish`` 不提供原生结果。
 
 启用运行日志时，``execution_health`` 将未解决的推理和动作 RPC 故障关联到相应回合及执行段。Planner 正常结束不能消除这些故障。Launcher 在 ``native_task_result`` 保留原生事实，并在 ``independent_result.json`` 中写入 ``outcome=unknown``、``validity=technical_invalid``；验收与评价读取该收尾结果。当前尚未定义执行故障的恢复判据。参数纠正和已验证的预算收尾沿用原有语义。
 

@@ -21,9 +21,10 @@ use the same directory structure:
    │   └── <task_key>.md
    └── _internal/inbox/<cell>/
 
-The default local root is ``memory/<robot>/``. On Hugging Face, LIBERO has
-model-specific roots, described in :doc:`../guides/memory`; other robots use ``<robot>/``. A custom
-``--memory-dir`` may point at any directory laid out like the tree above.
+The default local root is ``memory/<robot>/``. Published LIBERO and RoboCasa
+corpora use model-specific subdirectories; RoboTwin also accepts an explicit
+corpus subdirectory. See :doc:`../guides/memory` and each simulator guide for
+selection rules. ``--memory-dir`` selects a local root with the layout above.
 
 Each robot provides the memory layers it uses:
 
@@ -78,7 +79,7 @@ Exploration and Merging
 
 Exploration preserves state and tool records for its attempts and produces experience drafts with provenance. The runner determines success from the environment and calls ``MemoryManager.merge_memory`` to merge drafts and update the index; successful task audits and action sequences have separate publication conditions.
 
-Simulation environments merge automatically by default; ``--no-auto-merge-memory`` retains drafts for review. Dual-arm Franka disables automatic merging by default and relies on operator judgments. In a manual ``rpent-memory merge``, ``--solved`` is a caller-supplied success flag; use it only after verifying the environment or operator result.
+Exploration merges memory automatically by default; ``--no-auto-merge-memory`` retains drafts for review. Dual-arm Franka and YAM require operator judgments and scene restoration. Successful task records require confirmed success; valid general lessons may also come from failed attempts. In a manual ``rpent-memory merge``, use ``--solved`` only after verifying the environment or operator result.
 
 ``rpent-memory validate`` checks file structure, not real task success. See ``rpent/memory/manager.py`` for permissions and merging, and each robot’s ``robot_spec.py`` plus ``rpent/cli/main.py`` for run modes and result handling.
 

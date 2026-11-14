@@ -84,5 +84,37 @@ class EvaluatorTests(unittest.TestCase):
         self.assertIsNone(result.hard_constraints['resource_limits'])
 
 
+    def test_partial_matrix_retains_confirmed_runtime_violation(self):
+        manifest = self.native()
+        (Path(manifest[0]['result_path']).parent/'runtime_context.json').write_text('{}')
+        report = dict(passed=False, costs={}, notes=[], checks={}, effective_rules={},
+                      confirmed_violations=['safety', 'resource_limits'])
+        with patch('rsi_vla.evaluator.inspect_attempt', return_value=report):
+            result = self.evaluate(manifest)
+        self.assertEqual(result.unknown_count, 7)
+        self.assertIs(result.hard_constraints['safety'], False)
+        self.assertIs(result.hard_constraints['resource_limits'], False)
+        self.assertIsNone(result.hard_constraints['reference_coverage'])
+
+    def test_technical_failure_does_not_establish_safety_violation(self):
+        manifest = self.native(error='model transport failed', validity='technical_invalid')
+        (Path(manifest[0]['result_path']).parent/'runtime_context.json').write_text('{}')
+        report = dict(passed=False, costs={}, notes=[], effective_rules={},
+                      checks={'clean_completion': False, 'execution_health': False},
+                      confirmed_violations=[])
+        with patch('rsi_vla.evaluator.inspect_attempt', return_value=report):
+            result = self.evaluate(manifest)
+        self.assertEqual((result.unknown_count, result.invalid_count), (8, 1))
+        self.assertIsNone(result.hard_constraints['safety'])
+        self.assertIsNone(result.hard_constraints['resource_limits'])
+        self.assertIsNone(result.hard_constraints['critical_old_preserved'])
+
+    def test_partial_progress_violation_still_rejects_its_constraint(self):
+        with patch('rsi_vla.evaluator.inspect_progress',
+                   return_value={'value': False, 'evidence_refs': []}):
+            result = self.evaluate(self.native())
+        self.assertIs(result.hard_constraints['critical_progress'], False)
+
+
 if __name__ == '__main__':
     unittest.main()

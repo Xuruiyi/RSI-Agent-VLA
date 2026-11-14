@@ -586,6 +586,38 @@ def test_compact_pixel_mapping_matches_historical_calibration():
 def test_native_gate_rejection_is_normal_closure_but_other_errors_remain(tmp_path):
     journal = RuntimeJournal(context(tmp_path))
     journal.complete_native_success(step=1)
+    marker = journal.native_completion()
+    identity = {
+        key: journal.context[key]
+        for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+    }
+    events_path = tmp_path / "model_requests.jsonl"
+    events_path.write_text(
+        json.dumps(
+            {
+                "identity": identity,
+                "sequence": 0,
+                "kind": "rejected",
+                "reason": "native task completed",
+                "forwarded": False,
+                "monotonic_seconds": marker["monotonic_ns"] / 1e9 + 0.01,
+            }
+        )
+        + "\n"
+    )
+    (tmp_path / "local_model_stop.json").write_text(
+        json.dumps(
+            {
+                "identity": identity,
+                "reason": "native_success",
+                "forwarded": False,
+                "rejection_sequence": 0,
+                "model_requests_ref": str(events_path),
+                "marker_ref": str(tmp_path / "native_completion.json"),
+                "marker_sequence": marker["sequence"],
+            }
+        )
+    )
     recorder = _Recorder(20, NullDashboardEventSink(), runtime_journal=journal)
     recorder.observe(
         {
@@ -594,7 +626,12 @@ def test_native_gate_rejection_is_normal_closure_but_other_errors_remain(tmp_pat
                 "turn": {
                     "status": "failed",
                     "error": {
-                        "message": "native task completed; no further Planner request forwarded"
+                        "message": "exceeded retry limit, last status: 429 Too Many Requests",
+                        "codex_error_info": {
+                            "response_too_many_failed_attempts": {
+                                "http_status_code": 429
+                            }
+                        },
                     },
                 }
             },
@@ -642,3 +679,70 @@ def test_inference_binds_latest_observation_event(tmp_path):
         assert inference["observation_sequence"] == updates[-1]["sequence"]
         assert inference["observation_mode"] == "latest"
     assert result["executed_steps"] == 10
+
+
+def test_failed_toolkit_initialization_keeps_measured_zero_tool_cost(
+    tmp_path, monkeypatch
+):
+    from rpent.utils import templates
+
+    monkeypatch.setattr(
+        templates, "default_variables", lambda: {"output_dir": str(tmp_path)}
+    )
+    journal = RuntimeJournal(context(tmp_path / "run"))
+    monkeypatch.setattr(
+        RuntimeJournal, "from_environment", classmethod(lambda cls: journal)
+    )
+
+    def fail(self, **kwargs):
+        raise RuntimeError("native contract unavailable")
+
+    monkeypatch.setattr(LiberoToolkit, "init_primitives", fail)
+    with pytest.raises(RuntimeError, match="native contract unavailable"):
+        LiberoToolkit(
+            runtime_kwargs={},
+            dashboard_events=NullDashboardEventSink(),
+            memory=MemoryManager(tmp_path / "memory"),
+            state_output_dir=tmp_path / "state",
+        )
+    costs = json.loads(journal.costs_path.read_text())
+    assert costs["tool_calls"] == 0 and costs["active_tools"] == 0
+    events = [json.loads(line) for line in journal.events_path.read_text().splitlines()]
+    assert events[-1]["kind"] == "toolkit_initialization_error"
+    assert not any(e["kind"] == "tool_call" for e in events)
+
+
+@pytest.mark.parametrize("terminal", ["success", "truncation"])
+def test_native_feedback_closes_only_model_admission_before_media(tmp_path, terminal):
+    journal = RuntimeJournal(context(tmp_path))
+    primitive, env, model = driver(journal=journal, terminal=terminal)
+    checks = []
+
+    def record(obs):
+        checks.append((tmp_path / "planner_admission_closed.json").exists())
+        assert not (tmp_path / "native_completion.json").exists()
+
+    primitive._recording = True
+    primitive.record_frame = record
+    primitive.vla_execute("whole task", max_chunks=1)
+    assert checks and all(checks) is (terminal == "success")
+    assert not (tmp_path / "native_completion.json").exists()
+    if terminal == "success":
+        marker = json.loads((tmp_path / "planner_admission_closed.json").read_text())
+        events = [
+            json.loads(line) for line in journal.events_path.read_text().splitlines()
+        ]
+        assert marker["reason"] == "native_success_observed"
+        assert events[marker["source_sequence"]]["kind"] == "action_feedback"
+
+
+def test_early_model_admission_boundary_does_not_close_recorder_attempt(tmp_path):
+    journal = RuntimeJournal(context(tmp_path))
+    journal.close_planner_admission(source_sequence=0)
+    recorder = _Recorder(20, NullDashboardEventSink(), runtime_journal=journal)
+    error = RuntimeError(
+        "native state capture incomplete; no further Planner request forwarded"
+    )
+    assert not recorder.observe_native_gate_rejection(error)
+    assert recorder.request_native_stop() is None
+    assert not recorder.stats()["attempt_closed"]

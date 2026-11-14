@@ -4,8 +4,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from rsi_vla.adapters.runtime_supervisor import supervise
+from rsi_vla.adapters.runtime_supervisor import _live_group, supervise
 
 
 class RuntimeSupervisorTests(unittest.TestCase):
@@ -28,6 +29,18 @@ class RuntimeSupervisorTests(unittest.TestCase):
     def run_child(self, code, **limits):
         return supervise([sys.executable, '-c', code], context_path=self.context(**limits),
                          poll_interval_s=.01, terminate_grace_s=.1)
+
+    def test_absent_group_needs_no_proc_scan(self):
+        with patch("rsi_vla.adapters.runtime_supervisor.os.killpg", side_effect=ProcessLookupError), \
+                patch("rsi_vla.adapters.runtime_supervisor.Path.glob", side_effect=AssertionError("unnecessary scan")):
+            self.assertEqual(_live_group(1234), [])
+
+    def test_existing_group_still_checks_membership(self):
+        with patch("rsi_vla.adapters.runtime_supervisor.os.killpg") as exists, \
+                patch("rsi_vla.adapters.runtime_supervisor.Path.glob", return_value=[]) as scan:
+            self.assertEqual(_live_group(1234), [])
+        exists.assert_called_once_with(1234, 0)
+        scan.assert_called_once()
 
     def test_natural_exit_records_identity_costs_and_keeps_artifacts(self):
         result = self.run_child('print("offline child")')

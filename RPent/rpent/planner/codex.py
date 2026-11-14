@@ -188,6 +188,7 @@ class CodexPlanner(Planner):
             max_turns=max_turns,
             dashboard_events=self._dashboard_events,
             runtime_journal=journal,
+            tool_drain_deadline=time.monotonic() + self._timeout_s,
         )
         state: dict[str, Any] = {}
 
@@ -225,10 +226,13 @@ class CodexPlanner(Planner):
         )
         worker.start()
         error: str | None = None
+        cleanup_failed = False
+        timed_out = False
         try:
             worker.join(timeout=self._timeout_s)
 
             if worker.is_alive():
+                timed_out = True
                 error = f"Codex SDK timed out after {self._timeout_s}s"
                 try:
                     toolkit.cancel_active_and_wait()
@@ -259,12 +263,26 @@ class CodexPlanner(Planner):
                 toolkit.cancel_active_and_wait()
             except Exception as exc:
                 logger.exception("Codex toolkit cleanup failed")
-                error = error or f"Toolkit cleanup failed: {exc}"
+                cleanup_failed = True
+                cleanup_error = f"Toolkit cleanup failed: {exc}"
+                error = (
+                    cleanup_error
+                    if recorder._resolve_local_stop()
+                    else error or cleanup_error
+                )
             finally:
                 mcp_server.stop()
 
         elapsed = time.time() - started
         text = state.get("text", "") or output_path.read_text(errors="replace")
+        if (
+            "error" in state
+            and not worker.is_alive()
+            and not cleanup_failed
+            and not timed_out
+            and recorder._resolve_local_stop()
+        ):
+            error = None
         error = error or recorder.error
 
         logger.info("Codex SDK finished in %.1fs", elapsed)
@@ -381,6 +399,8 @@ class CodexPlanner(Planner):
                                     out_f.write(rendered)
                                     out_f.flush()
                                 logger.info(rendered.strip())
+                            if recorder.error is not None:
+                                recorder.wait_for_local_tools()
                             if (
                                 str(_get(event, "method", "")) != "turn/completed"
                                 and not limit_reached
@@ -407,6 +427,11 @@ class CodexPlanner(Planner):
                                     if exc.message != "no active turn to interrupt":
                                         raise
                                     # The terminal notification may still be queued.
+                    except Exception as exc:
+                        recorder.observe_native_gate_rejection(exc)
+                        recorder.wait_for_local_tools()
+                        state["recorded_exception"] = exc
+                        raise
                     finally:
                         if stop_steer is not None:
                             stop_steer.set()
@@ -417,10 +442,10 @@ class CodexPlanner(Planner):
             if recorder.final_response is not None:
                 last_message_path.write_text(recorder.final_response)
         except Exception as e:
-            if recorder.observe_native_gate_rejection(e):
-                state["text"] = "".join(chunks)
-            else:
-                state["error"] = e
+            state["text"] = "".join(chunks)
+            state["error"] = e
+            if state.get("recorded_exception") is not e:
+                recorder.observe_native_gate_rejection(e)
 
     async def _solve_dashboard(
         self,
@@ -437,6 +462,7 @@ class CodexPlanner(Planner):
             max_turns=max_turns,
             dashboard_events=self._dashboard_events,
             runtime_journal=getattr(toolkit, "runtime_journal", None),
+            tool_drain_deadline=time.monotonic() + self._timeout_s,
         )
         chunks: list[str] = []
         error: str | None = None
@@ -520,6 +546,8 @@ class CodexPlanner(Planner):
 
         if recorder.final_response is not None:
             last_message_path.write_text(recorder.final_response)
+        if session.sdk_exception and recorder._resolve_local_stop():
+            session.error = None
         text = "".join(chunks)
         return PlannerResult(
             finish_result=recorder.finish_result,
@@ -574,6 +602,7 @@ class _CodexDashboardSession:
         self._turn_task: asyncio.Task[Any] | None = None
         self._closing = False
         self.error: str | None = None
+        self.sdk_exception = False
 
     async def run(self, prompt: str) -> None:
         self._codex = openai_codex.AsyncCodex(self._config)
@@ -638,6 +667,12 @@ class _CodexDashboardSession:
         try:
             async for event in turn.stream():
                 self._emit_event(event)
+                if (
+                    self._recorder.error is not None
+                    and self._recorder.runtime_journal is not None
+                    and self._recorder.runtime_journal.active_tools
+                ):
+                    await self._recorder.wait_for_local_tools_async()
                 method = str(_get(event, "method", ""))
                 payload = _get(event, "payload")
 
@@ -684,7 +719,11 @@ class _CodexDashboardSession:
                 done.set()
                 if self._closing:
                     return
-                if status == "failed" and self._recorder.planner_native_stop is None:
+                if status == "failed" and (
+                    self._recorder.error is not None
+                    or self._recorder.planner_native_stop is None
+                    and self._recorder.planner_budget_stop is None
+                ):
                     self.error = self._recorder.error or "Codex turn failed"
                 if (
                     self.error is not None
@@ -702,7 +741,14 @@ class _CodexDashboardSession:
             self._turn = None
             self._turn_done = None
             done.set()
-            if not self._recorder.observe_native_gate_rejection(exc):
+            self.sdk_exception = True
+            self._recorder.observe_native_gate_rejection(exc)
+            if (
+                self._recorder.runtime_journal is not None
+                and self._recorder.runtime_journal.active_tools
+            ):
+                await self._recorder.wait_for_local_tools_async()
+            if not self._recorder._resolve_local_stop():
                 self.error = f"{type(exc).__name__}: {exc}"
             if not self._closing:
                 self._control.end()
@@ -737,11 +783,20 @@ class _Recorder:
     runtime_journal: RuntimeJournal | None = None
     planner_budget_stop: dict[str, Any] | None = None
     planner_native_stop: dict[str, Any] | None = None
+    sdk_errors: list[dict[str, Any]] = field(default_factory=list)
+    _unrelated_error: bool = False
+    _active_sdk_tools: dict[str, Any] = field(default_factory=dict)
+    _seen_tool_ids: set[str] = field(default_factory=set)
+    tool_drain_deadline: float | None = None
 
     def stats(self) -> dict[str, Any]:
+        self._resolve_local_stop()
         budget_closed = (
             self.planner_budget_stop is not None
-            and self.planner_turn_status == "interrupted"
+            and (
+                self.planner_turn_status == "interrupted"
+                or self.planner_budget_stop.get("local_model_stop") is not None
+            )
             and self.error is None
         )
         return {
@@ -760,39 +815,134 @@ class _Recorder:
             else "verified_budget_exhaustion"
             if self.planner_budget_stop is not None
             and self.error is None
-            and self.planner_turn_status in {"interrupted", "completed"}
+            and (
+                self.planner_turn_status in {"interrupted", "completed"}
+                or self.planner_budget_stop.get("local_model_stop") is not None
+            )
             else self.planner_turn_status,
             "planner_budget_stop": self.planner_budget_stop,
+            "sdk_errors": self.sdk_errors,
             **self.usage,
         }
 
     def observe_native_gate_rejection(self, error: Any) -> bool:
-        """Recognize only our local post-success admission rejection, keeping other errors."""
-        if "native task completed; no further Planner request forwarded" not in str(
-            error
-        ):
+        """Retain an SDK error and classify it using local transport evidence."""
+        raw = _jsonable(error)
+        if isinstance(error, BaseException):
+            raw = {
+                "type": type(error).__name__,
+                "message": str(error),
+                "data": _jsonable(getattr(error, "data", None)),
+            }
+        candidate = _sdk_http_status(raw) == 429
+        self.sdk_errors.append({"error": raw, "local_rejection_candidate": candidate})
+        if not self._unrelated_error:
+            self.error = str(_get(error, "message", error))
+        self._unrelated_error |= not candidate
+        return self._resolve_local_stop()
+
+    def _resolve_local_stop(self) -> bool:
+        """Resolve only structured HTTP429 errors with this run's receipt."""
+        if not self.sdk_errors or self._unrelated_error or self._external_tool_active():
             return False
         journal = self.runtime_journal
-        marker = journal.native_completion() if journal is not None else None
+        marker = (
+            journal.planner_stop_evidence(require_rejection=True)
+            if journal is not None
+            else None
+        )
         if marker is None:
             return False
-        self.planner_native_stop = marker
-        journal.emit("planner_native_admission_closed", sdk_error=str(error))
+        if marker["local_model_stop"]["reason"] == "native_success":
+            if self.planner_native_stop is None:
+                journal.emit(
+                    "planner_native_admission_closed",
+                    local_model_stop=marker["local_model_stop"],
+                    sdk_errors=self.sdk_errors,
+                )
+            self.planner_native_stop = marker
+        else:
+            if self.planner_budget_stop is None:
+                self.planner_budget_stop = {
+                    **marker,
+                    "budget_stop_ref": str(journal.budget_stop_path),
+                    "planner_events_ref": str(journal.events_path),
+                    "planner_event_sequence": journal.emit(
+                        "planner_budget_stop", budget_stop=marker
+                    ),
+                }
+            else:
+                self.planner_budget_stop.update(
+                    local_model_stop=marker["local_model_stop"],
+                    local_model_stop_ref=marker["local_model_stop_ref"],
+                )
+        self.error = None
+        return True
+
+    def wait_for_local_tools(self) -> None:
+        """Let admitted tools finish before SDK cleanup after a local rejection."""
+        if not self._can_drain_local_tools():
+            return
+        journal = self.runtime_journal
+        while journal.active_tools and time.monotonic() < self.tool_drain_deadline:
+            time.sleep(min(0.01, max(0, self.tool_drain_deadline - time.monotonic())))
+        self._resolve_local_stop()
+
+    async def wait_for_local_tools_async(self) -> None:
+        """Drain local tools while keeping Dashboard control responsive."""
+        if not self._can_drain_local_tools():
+            return
+        journal = self.runtime_journal
+        while journal.active_tools and time.monotonic() < self.tool_drain_deadline:
+            await asyncio.sleep(
+                min(0.01, max(0, self.tool_drain_deadline - time.monotonic()))
+            )
+        self._resolve_local_stop()
+
+    def _can_drain_local_tools(self) -> bool:
+        journal = self.runtime_journal
+        if (
+            journal is None
+            or not journal.active_tools
+            or self.tool_drain_deadline is None
+            or not self.sdk_errors
+            or self._unrelated_error
+        ):
+            return False
+        try:
+            receipt = json.loads(
+                (journal.output_dir / "local_model_stop.json").read_text()
+            )
+            if (
+                receipt.get("forwarded") is not False
+                or receipt.get("reason") not in {"native_success", "budget_exhausted"}
+                or any(
+                    receipt.get("identity", {}).get(key) != journal.context.get(key)
+                    for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+                )
+            ):
+                return False
+        except (OSError, ValueError, TypeError):
+            return False
         return True
 
     def request_native_stop(self) -> dict[str, Any] | None:
         """Interrupt the SDK control loop without classifying native success as cancellation."""
         journal = self.runtime_journal
+        self._resolve_local_stop()
         if (
             self.planner_native_stop is not None
+            or self.error is not None
             or journal is None
             or journal.active_tools
+            or self._external_tool_active()
         ):
             return None
-        marker = journal.native_completion()
-        if marker is not None:
+        marker = journal.planner_stop_evidence()
+        if marker is not None and marker.get("reason") == "native_success":
             self.planner_native_stop = marker
-        return marker
+            return marker
+        return None
 
     def request_budget_stop(self) -> dict[str, Any] | None:
         """Record a local controller stop after admitted tools have drained."""
@@ -800,6 +950,7 @@ class _Recorder:
             self.finish_result is not None
             or self.error is not None
             or self.planner_budget_stop is not None
+            or self._external_tool_active()
         ):
             return None
         if self.planner_turn_status in {"interrupted", "cancelled", "failed"}:
@@ -836,6 +987,17 @@ class _Recorder:
     def observe(self, event: Any) -> str:
         method = str(_get(event, "method", ""))
         payload = _get(event, "payload")
+        item = _unwrap(_get(payload, "item"))
+        if method in {"item/started", "item/completed"} and _is_tool_item(item):
+            item_id = _get(item, "id")
+            if item_id:
+                if str(item_id) not in self._seen_tool_ids:
+                    self._seen_tool_ids.add(str(item_id))
+                    self.tool_calls += 1
+                if method == "item/started":
+                    self._active_sdk_tools[str(item_id)] = item
+                else:
+                    self._active_sdk_tools.pop(str(item_id), None)
 
         if method in {"thread/started", "turn/started"}:
             if method == "turn/started":
@@ -855,7 +1017,7 @@ class _Recorder:
             detail = _short_json(_jsonable(payload), limit=500)
             retrying = bool(_get(payload, "will_retry", False))
             if not retrying:
-                self.error = detail
+                self.observe_native_gate_rejection(payload)
             label = (
                 "Model connection retrying" if retrying else "Model connection failed"
             )
@@ -864,6 +1026,17 @@ class _Recorder:
             )
             return f"[codex-error] {detail}\n"
         return ""
+
+    def _external_tool_active(self) -> bool:
+        """L0 can prove RPent completion; SDK-owned tools need their terminal."""
+        return any(
+            str(_get(item, "type", "")) != "mcpToolCall"
+            or (
+                _get(item, "server") != "rpent"
+                and not str(_get(item, "tool", "")).startswith("mcp__rpent__")
+            )
+            for item in self._active_sdk_tools.values()
+        )
 
     # -- per-item handlers -------------------------------------------------
 
@@ -895,7 +1068,8 @@ class _Recorder:
             return f"[codex-reasoning] {text}\n" if text else ""
 
         if _is_tool_item(item):
-            self.tool_calls += 1
+            if not _get(item, "id"):
+                self.tool_calls += 1
             if item_type in {"mcpToolCall", "dynamicToolCall"}:
                 name = strip_mcp_prefix(str(_get(item, "tool", item_type)))
                 self._maybe_capture_finish(name, item)
@@ -927,9 +1101,7 @@ class _Recorder:
         self.planner_turn_status = status
         duration_ms = _get(turn, "duration_ms")
         if error := _get(turn, "error"):
-            message = str(_get(error, "message", str(error)))
-            if not self.observe_native_gate_rejection(message):
-                self.error = message
+            self.observe_native_gate_rejection(error)
 
         parts = ["[codex-result]", status]
         if duration_ms is not None:
@@ -1299,6 +1471,18 @@ def _get(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
+
+
+def _sdk_http_status(value: Any) -> int | None:
+    """Read structured SDK HTTP status without interpreting error messages."""
+    if isinstance(value, dict):
+        status = value.get("http_status_code", value.get("httpStatusCode"))
+        if type(status) is int:
+            return status
+        for nested in value.values():
+            if (status := _sdk_http_status(nested)) is not None:
+                return status
+    return None
 
 
 def _is_tool_item(item: Any) -> bool:

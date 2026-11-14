@@ -1,0 +1,102 @@
+"""Independent verification of actual relation consumers, separate from binding."""
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+from .cooperation import fixed_research_step
+from .relation_evidence import review_skill_feedback
+from .relation_learning import select_media
+
+
+def evaluate_relation_consumption(store, output, *, research_request_ids=()):
+    """Verify real Research input, dispatch gate and skill execution receipts.
+
+    A bound rho in a Runtime context is insufficient. Each relation must reach
+    its corresponding consumer; missing consumer evidence remains unknown.
+    The caller owns the independent evaluation role and output persistence.
+    """
+    root = Path(output).resolve()
+    context_ref = root / 'runtime_context.json'
+    context = json.loads(context_ref.read_text())
+    identity = {key: context[key] for key in ('run_id', 'episode_id', 'bundle_id', 'protocol_id')}
+    binding = context['execution_binding']
+    bundle = binding['bundle']
+    rho_ref = bundle['rho_ref']
+    rho = binding['records']['rho_ref']
+    if context.get('information_scope') != 'development' or context.get('rho_ref') != rho_ref:
+        raise ValueError('relation consumption requires the bound development execution')
+    relations = {name: dict(value=None, source_refs=[], missing=[]) for name in ('rhoA', 'rhoB', 'rhoC')}
+    for request_id in research_request_ids:
+        request = store.get('llm_requests', request_id)
+        execution = store.get('llm_executions', request_id)
+        if request.get('bundle_id') != bundle['bundle_id'] or execution.get('base_bundle_id') != bundle['bundle_id']:
+            raise ValueError('Research consumer belongs to another relation candidate')
+        facts = execution['transport_facts']
+        if (facts['effective_model'], facts['effective_reasoning_effort']) != ('gpt-6.1-sol', 'high'):
+            raise ValueError('relation Research consumption needs actual high transport facts')
+        views = request.get('evidence_views', [])
+        if not views or any(view.get('policy_ref') != rho_ref
+                            or view.get('selected_media') != select_media(rho['rhoA'], view['l0'])
+                            for view in views):
+            raise ValueError('actual Research input did not consume the candidate rhoA')
+        from .research_transport import unpack
+        actual = store.get('bounded_requests', request_id)
+        transport = store.get('bounded_transports', request_id)
+        if unpack(transport) != actual or actual.get('bundle_id') != bundle['bundle_id']:
+            raise ValueError('actual Research transport differs from its bound request')
+        originals = {view['view_id']: view for view in views}
+        actual_views = actual.get('evidence_views', [])
+        if not actual_views or any(view['view_id'] not in originals
+                or view.get('policy_ref') != rho_ref
+                or view.get('selected_media') != originals[view['view_id']]['selected_media']
+                for view in actual_views):
+            raise ValueError('actual Research transport discarded the candidate rhoA selection')
+        covered = [view for view in views if any(
+            event.get('run_id') == identity['run_id']
+            and event.get('episode_id') == identity['episode_id']
+            and event.get('active_bundle') == bundle['bundle_id'] for event in view['l0'])]
+        actual_ids = {view['view_id'] for view in actual_views}
+        if not covered or not any(view['view_id'] in actual_ids for view in covered):
+            raise ValueError('actual rhoA transport does not cover this development execution')
+        refs = [store.path('llm_requests', request_id), store.path('llm_executions', request_id),
+                store.path('bounded_requests', request_id), store.path('bounded_transports', request_id),
+                Path(facts['evidence_ref'])]
+        if not all(ref.is_file() for ref in refs):
+            raise ValueError('actual Research consumer source is missing')
+        relations['rhoA'].update(value=True, source_refs=[str(ref) for ref in refs])
+    if relations['rhoA']['value'] is None:
+        relations['rhoA']['missing'].append('No actual Research request/execution with candidate evidence selection')
+    gate = context.get('relation_dispatch_admission')
+    if gate is not None:
+        if gate.get('rho_ref') != rho_ref or gate.get('actual_dispatch_gate') is not True:
+            raise ValueError('actual dispatch gate has another policy binding')
+        evidence = [store.get('development_results', key) for key in gate['source_result_ids']]
+        if any(row.get('role') != 'development' or row['intervention'].get('information_scope') != 'development'
+               for row in evidence):
+            raise ValueError('dispatch gate cannot consume formal or sealed feedback')
+        decisions = [dict(state=row['state'], action=fixed_research_step(
+            rho, SimpleNamespace(state=gate['job_state_before_dispatch']), evidence_available=bool(evidence),
+            inspected=True, legal_repairs=['relation_feedback_update'], experiment_permitted=True,
+            state=row['state'])) for row in gate['decisions']]
+        if decisions != gate['decisions'] or gate['action'] != 'prepare':
+            raise ValueError('actual dispatch differs from independently recomputed rhoC')
+        relations['rhoC'].update(value=bool(decisions) and all(row['action'] == 'bounded_experiment' for row in decisions),
+                                  source_refs=[str(context_ref), str(root/'code_snapshot/core/src/rsi_vla/task_completion.py'),
+                                               str(root/'code_snapshot/core/src/rsi_vla/cooperation.py')])
+    else:
+        relations['rhoC']['missing'].append('No actual candidate-policy dispatch gate')
+    if context.get('relation_control', {}).get('routes'):
+        report = review_skill_feedback(root)
+        known = [row for row in report['reviews'] if row.get('client_route_sequence') is not None]
+        relations['rhoB'].update(value=True if known and all(not row['missing'] for row in known) else None,
+                                 source_refs=report['source_refs'], review=report)
+        if relations['rhoB']['value'] is None:
+            relations['rhoB']['missing'].append('No complete independently linked skill consumer')
+    else:
+        relations['rhoB']['missing'].append('No registered skill consumer for this task')
+    for name, value in relations.items():
+        if value['value'] is True and not all(Path(ref).is_file() for ref in value['source_refs']):
+            raise ValueError(name+' consumer references missing evidence')
+    return dict(schema='rsi-relation-consumption-v1', identity=identity, rho_ref=rho_ref,
+                relations=relations, role='evaluation', binding_alone_sufficient=False)

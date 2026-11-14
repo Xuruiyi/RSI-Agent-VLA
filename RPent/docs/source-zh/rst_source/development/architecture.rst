@@ -19,7 +19,7 @@ RPent 将任务规划、工具执行和环境运行分开：规划器选择工�
 3. 运行器按记忆配置同步或使用本地数据，构造规划器并渲染提示词。
 4. ``init_runtime`` 启动或连接服务，返回运行参数和本次运行拥有的进程；``get_toolkit`` 创建工具集与记忆管理器。
 5. 规划器通过 ``list_tools`` 获取工具定义，通过 ``execute_tool`` 执行调用，再读取工具返回的文本和图像，继续规划。
-6. 动作工具调用 VLA 或程序化动作，环境执行后记录状态和观测，供下一轮规划使用。
+6. 动作工具调用 VLA、WAM 或程序化动作，环境执行后记录状态和观测，供下一轮规划使用。
 7. 规划器调用 ``finish``、达到运行限制或发生错误时结束。运行器保存对话，完成录像及清理；需要评测产物的环境通过结束钩子输出结果。
 
 ``finish`` 表示规划器结束，成功标准由具体环境或真机操作员提供。对应关系见各环境页。主入口为 ``rpent/cli/main.py``。
@@ -41,7 +41,7 @@ RPent 将任务规划、工具执行和环境运行分开：规划器选择工�
      - 定义工具参数、分发调用、保存状态，并将工具返回值转换为供规划器读取的 ``ToolResult``。
    * - Environment service
      - 拥有仿真器或真机连接，执行动作并提供原生状态与成功判定。
-   * - VLA / perception services
+   * - 动作模型 / 感知服务
      - 加载模型并提供动作预测、分割等能力，具体服务由环境配置。
    * - MemoryManager
      - 控制记忆读取与探索草稿写入，管理经验合并和索引。
@@ -65,12 +65,15 @@ RPent 将任务规划、工具执行和环境运行分开：规划器选择工�
      tools/        # Toolkit and shared tool behavior
      memory/       # Memory permissions, merge, and indexing
      evaluation/   # Evaluation result support
+     flywheel/     # Trajectory storage, validation, export
    robots/
      libero/
      robocasa/
      robotwin/
+     robodojo/
      franka/
      dual_franka/
+     yam/
 
 环境发现与接入
 ---------------------
@@ -108,6 +111,8 @@ LIBERO 会话复用 Pi0.5 和 SAM3，每个任务拥有独立环境并按顺序�
      - :doc:`add_robot`
    * - 将动作或感知能力提供为工具。
      - :doc:`add_primitive`
+   * - 接入 VLA 或 WAM 服务。
+     - :doc:`add_action_model`
    * - 添加规划器后端。
      - :doc:`add_planner`
    * - 理解记忆的访问和持久化机制。

@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from rpent.robots.components.action_spec import box_action_spec
 from rpent.robots.components.env_facade_base import BaseEnvFacade
 from rpent.session.runtime import runtime_context
 from rpent.utils.logging import get_logger
@@ -139,12 +138,16 @@ def make_env(
         seed=seed,
         max_episode_steps=max_episode_steps,
     )
-    env_class = LiberoEnv
+    from robots.libero.action_spec import action_spec_libero_class
+
+    from robots.libero.drawer_observation import drawer_observation_libero_class
+
+    env_class = drawer_observation_libero_class(action_spec_libero_class(LiberoEnv))
     context = runtime_context()
     if context is not None:
         from robots.libero.runtime_evidence import observed_libero_class
 
-        env_class = observed_libero_class(LiberoEnv, context)
+        env_class = observed_libero_class(env_class, context)
     return env_class(
         cfg=cfg, num_envs=1, seed_offset=0, total_num_processes=1, worker_info=None
     )
@@ -184,6 +187,7 @@ class LiberoEnvFacade(BaseEnvFacade):
                 "env.get_task_language": self.get_task_language,
                 "env.rsi_step": self.rsi_step,
                 "env.rsi_chunk_step": self.rsi_chunk_step,
+                "env.rsi_skill_observation": self.rsi_skill_observation,
             }
         )
         self._readonly_methods.add("env.get_task_language")
@@ -275,53 +279,51 @@ class LiberoEnvFacade(BaseEnvFacade):
         with rpc_evidence(self._env._rsi_journal, evidence, len(actions)):
             return self.chunk_step(actions, return_all_frames=return_all_frames)
 
+    def rsi_skill_observation(self, *, evidence: dict) -> dict:
+        """Record registered private handoff facts without exposing them to policy."""
+        from robots.libero.skill_routing import (
+            observation_route,
+            record_skill_observation,
+        )
+
+        journal = self._env._rsi_journal
+        route = observation_route(journal, evidence)
+        if route["criterion"]["schema"] == "rsi-skill-drawer-open-criterion-v1":
+            from robots.libero.drawer_observation import (
+                DRAWER_PROPERTY,
+                unknown_drawer_observation,
+            )
+
+            try:
+                joint = self._env.env.workers[self._env_idx].get_env_attr(
+                    DRAWER_PROPERTY
+                )
+                if not isinstance(joint, dict):
+                    joint = unknown_drawer_observation(
+                        "native worker drawer property unavailable"
+                    )
+            except (EOFError, OSError, RuntimeError, ValueError, AttributeError) as exc:
+                joint = unknown_drawer_observation(
+                    f"native worker lookup failed: {type(exc).__name__}: {exc}"
+                )
+            return record_skill_observation(
+                journal, {}, evidence, joint_observation=joint
+            )
+        return record_skill_observation(journal, self.raw_obs(), evidence)
+
     def raw_obs(self) -> dict:
         return to_numpy_tree(self._env.current_raw_obs[self._env_idx])
 
     def get_action_spec(self) -> dict:
-        """Describe the active single-arm OSC layout and native input bounds."""
-        worker = self._env.env.workers[self._env_idx]
-        low, high = worker.env_call(
-            "__getattribute__", args=["action_spec"], target="robosuite"
+        """Read the native controller contract through the RLinf worker API."""
+        metadata = self._env.env.workers[self._env_idx].get_env_attr(
+            "rpent_action_spec"
         )
-        robot_config = worker.env_call(
-            "__getattribute__", args=["robot_configs"], target="robosuite"
-        )[0]
-        # Standard LIBERO uses a composite controller; LIBERO-plus uses
-        # robosuite 1.4's single arm controller configuration.
-        if "composite_controller_config" in robot_config:
-            arm = robot_config["composite_controller_config"]["body_parts"]["right"]
-            frame = arm.get("input_ref_frame", "base")
-            mode = arm.get("input_type", "delta")
-        else:
-            arm = robot_config["controller_config"]
-            frame = "world"
-            mode = "delta" if arm.get("control_delta", True) else "absolute"
-        impedance = arm.get("impedance_mode", "fixed")
-        gains = {
-            "fixed": "",
-            "variable_kp": "6 stiffness gains, then ",
-            "variable": "6 damping ratios, 6 stiffness gains, then ",
-        }[impedance]
-        description = (
-            f"Native {arm['type']} action: {gains}"
-            "[x, y, z, rx, ry, rz], then gripper. "
-            f"Arm commands use the {frame} reference frame and {mode} control; "
-            "rotation is an axis-angle vector, not Euler angles. "
-        )
-        if mode == "delta":
-            description += (
-                "Arm inputs are normalized controller commands, linearly mapped "
-                f"from input_min={arm['input_min']} / input_max={arm['input_max']} "
-                f"to output_min={arm['output_min']} / output_max={arm['output_max']} "
-                "(xyz in metres per action; rotation in radians per action). "
+        if metadata is None:
+            raise RuntimeError(
+                "LIBERO worker native action-spec metadata is unavailable"
             )
-        else:
-            description += (
-                "Arm inputs are absolute xyz in metres and axis-angle in radians. "
-            )
-        description += "Gripper: -1 opens, +1 closes, 0 keeps the current command."
-        return {"default": box_action_spec(low, high, description)}
+        return metadata
 
     def get_env_meta(self) -> dict:
         """Return the meta info this server was launched with."""

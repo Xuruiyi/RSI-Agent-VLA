@@ -90,11 +90,12 @@ The terminal shows environment, VLA, and SAM3 service startup, followed by plann
 5. Inspect the Result
 ---------------------
 
+- ``result.json``: inspect the native task outcome, closure reason, and runtime errors.
 - ``episode.mp4``: replay the robot’s actions.
 - ``transcript_*.json``: inspect planner messages, tool calls, and the finish state.
 - ``run.log``: inspect runtime messages and errors.
 
-For LIBERO, success is the top-level ``terminated`` value in the final environment state, available in the result of ``view_env_state(step=-1)``. The planner’s ``finish`` status alone does not establish environment success.
+Inspect ``result.json`` for LIBERO’s native ``benchmark_success``, ``benchmark_status``, and runtime errors. The final state’s ``terminated`` flag, available through ``view_env_state(step=-1)``, records native task success. Planner ``finish`` alone does not establish success; missing or interrupted evidence can remain unknown. See :doc:`../simulators/libero` for closure and validity rules.
 
 See :ref:`run-output-files` for default directory names, exported action sequences, and step artifacts.
 

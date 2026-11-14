@@ -1,5 +1,12 @@
 # LIBERO-Pro Hybrid (Pi0.5 + LLM-in-the-loop) — Perception-Isolated Guide
 
+This guide describes the fine-grained `pi0_pick` workflow: Pi0.5 grasps, and the
+planner manages transport and release. If the launcher explicitly selects
+`bounded-vla-v1` and exposes `vla_execute`, use that task's bounded task/subgoal
+contract; the grasp-only division here applies to `pi0_pick`. Observation,
+perception isolation, and the task's actual budgets still apply.
+
+
 You are picking up the **LIBERO-Pro** evaluation track in **perception-isolated**
 mode — the only mode in this repository (the legacy oracle-state mode is not
 included here).
@@ -86,91 +93,39 @@ mode, the Object/Environment axes also stress your own localization** (a
 recolored or rescaled object is harder to pixel-pick), so lean on the
 multi-pixel-median tip from the perception protocol.
 
-## 2. Setup (do these once on a fresh checkout)
+## 2. Installation and task verification
 
-Run the idempotent installer from the repo root:
-
-```bash
-bash scripts/install_libero_pro_plus.sh
-```
-
-It does all four steps below: the liberopro editable install, applies the
-benchmark-registration patch, syncs the authoritative HF dataset snapshot, and
-verifies with the `get_benchmark(...).get_task(0).language` check. The perception
-observables (depth + both cameras + hi-res) are unconditional once the runner
-launches with `--libero-type pro`; there is nothing perception-specific to
-install beyond the PRO setup itself.
-
-### 2.1. LIBERO-PRO repo
-
-Cloned at `${LIBERO_PRO_PATH:-/path/to/LIBERO-PRO}/` from
-`https://github.com/RLinf/LIBERO-PRO.git` and installed editable into the openpi
-venv:
+Environment installation belongs to the operator, before starting a task.
+Follow the [Quick Start](../../../docs/source-en/rst_source/get_started/quickstart.rst)
+and [LIBERO guide](../../../docs/source-en/rst_source/simulators/libero.rst)
+for Python, PyTorch, model weights, and variant requirements. From an activated
+RPent environment, install PRO support and download its assets:
 
 ```bash
-python -m pip show liberopro
-# Name: liberopro  Version: 0.1.0  Location: ${LIBERO_PRO_PATH:-/path/to/LIBERO-PRO}
+uv pip install -e ".[libero-pro]"
+liberopro-download-assets --skip-existing
 ```
 
-### 2.2. Apply the benchmark-registration patch
+The package supplies the perturbation-suite registration. No separate
+`install_libero_pro_plus.sh` or registration patch is shipped in this checkout.
+Use the matching packaged BDDL and init files selected by the asset downloader;
+do not overlay an unrelated upstream dataset onto the installation.
 
-The upstream `__init__.py` does **not** expose the 16 perturbation suites through
-`get_benchmark()`. Our patch
-[`scripts/liberopro_register_perturbations.patch`](../../../../scripts/liberopro_register_perturbations.patch)
-adds them and overrides `Task.language` to read each BDDL's actual `:language`
-tag (so the perturbed instruction reaches Pi0 / hybrid).
+An operator can verify task registration before a run:
 
 ```bash
-cd ${LIBERO_PRO_PATH:-/path/to/LIBERO-PRO}
-git apply <repo-root>/scripts/liberopro_register_perturbations.patch
-```
-
-If already applied (likely), `git status -s` shows clean. If you reinstall
-liberopro, re-apply.
-
-### 2.3. Huggingface dataset (authoritative)
-
-The LIBERO-PRO git repo ships **incomplete / broken** init files for several
-perturbation suites (e.g. `libero_spatial_swap` has 0 BDDLs; some
-`libero_spatial_task` `.pruned_init` files are 0 bytes). Treat the git repo as
-unreliable for perturbation data. The full, correct set lives on Huggingface
-([`zhouxueyang/LIBERO-Pro`](https://huggingface.co/datasets/zhouxueyang/LIBERO-Pro)),
-persisted locally at:
-
-```
-${LIBEROPRO_DATASET_PATH:-/path/to/liberopro_hf}/
-├── bddl_files/                    16 perturbation suites, 10 BDDLs each
-└── init_files/                    16 perturbation suites, 10 init files each
-```
-
-Covers `{libero_spatial, libero_object, libero_goal, libero_10} × {swap, task,
-lan, object}`. The installer syncs this into the liberopro install (overwriting
-the broken upstream files); if the persistent copy is gone, re-download with:
-
-```bash
-python -c "
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id='zhouxueyang/LIBERO-Pro', repo_type='dataset',
-                  local_dir='${LIBEROPRO_DATASET_PATH:-/path/to/liberopro_hf}',
-                  allow_patterns=['bddl_files/**','init_files/**'])"
-```
-
-### 2.4. Verify
-
-```bash
-LIBERO_TYPE=pro python -c "
+LIBERO_TYPE=pro python - <<'CHECK'
 import liberopro.liberopro.benchmark as bench
-for n in ['libero_spatial_task','libero_spatial_swap','libero_spatial_lan']:
-    b = bench.get_benchmark(n)(); t = b.get_task(0)
-    print(f'{n} t0: {t.language!r}  trials={len(b.get_task_init_states(0))}')"
+for name in ("libero_spatial_task", "libero_spatial_swap", "libero_spatial_lan"):
+    suite = bench.get_benchmark(name)()
+    print(name, suite.get_task(0).language, len(suite.get_task_init_states(0)))
+CHECK
 ```
 
-Expected:
-```
-libero_spatial_task t0: 'Pick the akita black bowl not between the plate and the ramekin and place it on the plate'  trials=50
-libero_spatial_swap t0: 'Pick the akita black bowl between the plate and the ramekin and place it on the plate'  trials=50
-libero_spatial_lan  t0: 'lift the black bowl between the plate and ramekin and set it on the plate'  trials=50
-```
+This checks registration and initial-state availability. Runtime evaluation
+still uses `task_language` from `view_env_state(step=0)`; the agent must not
+read BDDL or init files to obtain hidden state. The runner owns services and
+perception artifacts throughout the task.
 
 ## 3. PRO-specific environment gotchas
 
@@ -330,7 +285,7 @@ Launch a cell with the CLI; the runner owns `env_server.py`, exposes the
 structured tools, and runs single-attempt:
 
 ```bash
-python rpent/cli/main.py --robot libero --suite <suite> --task <n> --seed <k> \
+rpent --robot libero --suite <suite> --task <n> --seed <k> \
     --libero-type pro --planner claude_code --model claude-opus-4-8
 
 # e.g. --suite libero_spatial_task 0 (P1) · libero_spatial_swap 0 (P2) ·
@@ -482,7 +437,7 @@ LIBERO_TYPE=pro python -c \
 # -> must read 'Pick the akita black bowl not between ...' (the perturbed text)
 
 # 2. Launch a perception cell (runner owns env_server; single-attempt)
-python rpent/cli/main.py --robot libero --suite libero_spatial_swap --task <N> --seed 0 \
+rpent --robot libero --suite libero_spatial_swap --task <N> --seed 0 \
     --libero-type pro --planner claude_code --model claude-opus-4-8
 ```
 
@@ -502,5 +457,5 @@ Then, inside the run:
 When in doubt about *how to localize* or a primitive, the source of truth is
 [`strict_hybrid_guide.md`](./strict_hybrid_guide.md); about *PRO setup /
 perturbation semantics*, see
-[`scripts/install_libero_pro_plus.sh`](../../../../scripts/install_libero_pro_plus.sh)
+[LIBERO installation](../../../docs/source-en/rst_source/simulators/libero.rst)
 and §2.

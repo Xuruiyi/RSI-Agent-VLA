@@ -217,27 +217,42 @@ class ResearchToolsTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 toolkit.call(name, {})
 
-    def test_llm_factory_is_explicit_medium_persisted_and_uses_legal_evidence(self):
-        adapter = ResearchLLMAdapter(model="gpt-6.1-sol", reasoning_effort="medium")
+    def test_llm_factory_defaults_high_persisted_and_uses_legal_evidence(self):
+        adapter = ResearchLLMAdapter()
         request = adapter.prepare_request(self.tools, request_id="request", result_ids=["base-result"],
                                           max_input_tokens=1000, max_output_tokens=100)
         self.assertEqual(self.store.get("llm_requests", "request"), request)
-        self.assertEqual(request["reasoning_effort"], "medium")
+        self.assertEqual(request["reasoning_effort"], "high")
         self.assertIsNone(request["execution"]["effective_model"])
         self.assertEqual(self.job.state["used"]["input_tokens"], 0)
         calls = [{"name": "query_development", "arguments": {"result_ids": ["base-result"]}}]
         response = {"effective_model": "gpt-6.1-sol",
-            "effective_reasoning_effort": "medium", "request_id": "request", "tool_calls": calls}
+            "effective_reasoning_effort": "high", "request_id": "request", "tool_calls": calls}
         self.assertEqual(adapter.validate_response(self.tools, response), calls)
         self.assertEqual(self.store.get("llm_responses", "request"), response)
         with self.assertRaises(ValueError):
-            ResearchLLMAdapter(model="gpt-6.1-sol", reasoning_effort="high")
+            ResearchLLMAdapter(model="gpt-6.1-sol", reasoning_effort="low")
         with self.assertRaises(ValueError):
             adapter.validate_response(self.tools, {"effective_model": "gpt-6.1-sol", "request_id": "request",
                                        "effective_reasoning_effort": "low", "tool_calls": calls})
         with self.assertRaises(ValueError):
             adapter.prepare_request(self.tools, request_id="oversized", result_ids=["base-result"],
                                     max_input_tokens=1001, max_output_tokens=100)
+
+    def test_historical_medium_parsing_does_not_allow_new_medium_requests(self):
+        adapter = ResearchLLMAdapter()
+        request = adapter.prepare_request(self.tools, request_id="new-high", result_ids=["base-result"],
+                                          max_input_tokens=1000, max_output_tokens=100)
+        historical = {**request, "request_id": "historical-medium", "reasoning_effort": "medium"}
+        self.store.put("llm_requests", "historical-medium", historical)
+        legacy = ResearchLLMAdapter(reasoning_effort="medium")
+        calls = [{"name": "query_development", "arguments": {"result_ids": ["base-result"]}}]
+        self.assertEqual(legacy.validate_response(self.tools, {"request_id": "historical-medium",
+            "effective_model": "gpt-6.1-sol", "effective_reasoning_effort": "medium", "tool_calls": calls}), calls)
+        with self.assertRaisesRegex(ValueError, "new Research requests require"):
+            legacy.prepare_request(self.tools, request_id="forbidden-new-medium", result_ids=["base-result"],
+                                   max_input_tokens=1000, max_output_tokens=100)
+        self.assertFalse(self.store.path("llm_requests", "forbidden-new-medium").exists())
 
     def test_real_v2_protocol_development_split_consumer(self):
         root = Path(__file__).resolve().parents[2]
@@ -452,8 +467,8 @@ class DynamicObservedCostTests(unittest.TestCase):
         f.job = ResearchJob(f.store, "observed-cost-job", f.base.bundle_id,
                             {**self.hard_limits, "other_operation_calls": 10})
         f.tools = ResearchTools(f.store, f.job, f.protocol, domain_policy=f.tools.domain_policy)
-        self.adapter = ResearchLLMAdapter(model="gpt-6.1-sol", reasoning_effort="medium")
-        self.transport = {"effective_model": "gpt-6.1-sol", "effective_reasoning_effort": "medium",
+        self.adapter = ResearchLLMAdapter()
+        self.transport = {"effective_model": "gpt-6.1-sol", "effective_reasoning_effort": "high",
                           "evidence_ref": "fake-supervised-transport-metadata.json"}
 
     def prepare(self, experiment="cost-experiment", bundle="cost-bundle", *, limits=None, level="simulation"):
@@ -576,7 +591,7 @@ class DynamicObservedCostTests(unittest.TestCase):
         self.request()
         with self.assertRaises(FileNotFoundError):
             self.adapter.validate_response(f.tools, {"request_id": "cost-request", "effective_model": "gpt-6.1-sol",
-                "effective_reasoning_effort": "medium", "tool_calls": []})
+                "effective_reasoning_effort": "high", "tool_calls": []})
         with self.assertRaisesRegex(ValueError, "transport evidence"):
             self.adapter.record_execution(f.tools, "cost-request", {"whole_job_wall_seconds": 2, "model_requests": 1},
                 {**self.transport, "effective_reasoning_effort": "low"})
@@ -588,7 +603,16 @@ class DynamicObservedCostTests(unittest.TestCase):
         f = self.f
         self.prepare()
         f.tools.record_experiment_result("cost-experiment", self.result())
-        self.prepare("negative-experiment", "negative-bundle")
+        f.tools.domain_policy["historical_development_bundle_ids"] = ["cost-bundle"]
+        f.tools.discover_opportunity("negative-opportunity", source="normal",
+            result_ids=["cost-result"], external_value="compare the completed trial with a new bounded run",
+            competing_explanations=f.explanations, expected_cost={"model_requests": 1})
+        f.tools.plan_rule_experiment("negative-experiment", opportunity_id="negative-opportunity",
+            bundle_id="negative-bundle", chunk_steps=2, criterion_ref="criterion-v1",
+            distinguishing_prediction="new run tests evidence from the completed cost trial",
+            cost_limit={key: min(cap, f.job.remaining()[key]) for key, cap in self.hard_limits.items()},
+            evidence_level="simulation")
+        f.tools.prepare_rule_trial("negative-experiment")
         f.tools.record_experiment_result("negative-experiment", self.result(
             "negative-result", "negative-bundle", outcome="failure"))
         self.request()

@@ -1,5 +1,11 @@
 # Strict Hybrid LLM + Pi0.5 — Perception-Isolated Guide
 
+This is the fine-grained grasp-and-script workflow. `pi0_pick` remains a grasp
+tool; a launcher-selected `bounded-vla-v1` task may instead expose
+`vla_execute` for bounded task/subgoal execution. Follow that task's tool
+contract and budgets rather than applying the grasp-only division globally.
+
+
 You are taking over a hybrid LIBERO experiment in **perception-isolated** mode
 — the only mode in this repository (the legacy oracle-state mode, where the
 state JSON carried GT object coordinates, is not included here).
@@ -21,7 +27,7 @@ state JSON carried GT object coordinates, is not included here).
 | how you get an object's xyz | read `state["objects"][name]` | **pick the object pixel, then `back_project({"row":ROW,"col":COL,"step":NN})` (K⁻¹+extrinsic already done); refine with the wrist map up close** |
 | how you confirm the grasp | GT object-lift oracle | **grasp-only, no oracle — you judge the grasp from gripper width + wrist cam (Rule 1 / 1b)** |
 | how you pick which of two identical objects | read their distinct coords | **by SPATIAL RELATION from `task_language` (elevation / left-right), never by `_1`/`_2` name** |
-| cell budget | 600 (short suites) | **1200** — perceptual localization + manipulation is slower |
+| cell budget | Historical short-suite example: 600 seconds | Historical perception example: 1200 seconds; the actual run uses its launcher budget |
 | audit `regime` | `strict` | `strict_perception` |
 
 How localization works (the core of this mode):

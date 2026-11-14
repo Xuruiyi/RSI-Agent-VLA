@@ -17,7 +17,7 @@ decisions. Molmo is used only for visual localization: it points to a requested
 object or location in a camera image so RPent can recover its current
 coordinates.
 
-Complete the LIBERO-PRO installation and model setup in :doc:`../get_started/quickstart` first. Start by running an existing plan; plan generation is covered later.
+This page covers LIBERO-PRO Flash replay. For single- or dual-arm Franka, use the :ref:`reviewed task-card workflow <franka-flash>`. For LIBERO, complete :doc:`../get_started/quickstart`, then start with an existing plan below.
 
 Plan Files
 ----------

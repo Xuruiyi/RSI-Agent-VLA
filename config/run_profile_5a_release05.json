@@ -1,0 +1,150 @@
+{
+  "profile_id": "matched-5a-release05-20261112",
+  "dynamic_authorized": true,
+  "planner": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "medium",
+    "provenance": "user authorized 2026-11-10; native Codex retained; tokens observed, request-count/wall/tool/step hard limits",
+    "tool_scope": "only rpent MCP; all inherited user MCP servers disabled in child configuration; model-visible calls also audited"
+  },
+  "memory": {
+    "profile": "hf",
+    "version": "GPT_5.5_xhigh",
+    "repo": "RLinf/RPent-memory",
+    "revision": "47f301ef33bf8d0e8c770342f16b3c39c6a0e8c1",
+    "external_prior": true,
+    "offline_only": true
+  },
+  "model": {
+    "backend": "pi05",
+    "checkpoint": "checkpoints/RLinf-Pi05-LIBERO-130-fullshot-SFT",
+    "revision": "6222623f635769bfc73c9472e29fab9b7fd8e027",
+    "normalization": "physical-intelligence/libero",
+    "loader": "installed RLinf 0.4.0 + rpent-openpi 0.2.2",
+    "tokenizer": "$OPENPI_DATA_HOME/big_vision/paligemma_tokenizer.model"
+  },
+  "control": {
+    "libero_type": "pro",
+    "policy": "Planner goals/supervision + bounded VLA segments; optional fine-grained primitives",
+    "action_dim": 7,
+    "model_action_dim": 32,
+    "action_chunk": 5,
+    "num_steps": 5,
+    "num_images_in_input": 2,
+    "max_episode_steps": 2000,
+    "auto_reset": false,
+    "ignore_terminations": false,
+    "ignore_done": true,
+    "reset_gripper_open": true,
+    "fixed_noise": null,
+    "clock_domain": "per-process host clocks; no synchronization verified",
+    "queue_snapshot_restore": "unverified",
+    "pilot_override": {
+      "previous_profile_limit": 10000,
+      "matched_comparisons_required": true
+    },
+    "discrete_state_input": false,
+    "max_token_len": 200,
+    "action_horizon": 10,
+    "num_steps_provenance": "runtime5 retained as pre-existing compute setting; checkpoint metadata10 is separately recorded, no 5vs10 task claim"
+  },
+  "observations": {
+    "images": [
+      "main_images",
+      "wrist_images"
+    ],
+    "states": "RLinf LIBERO native state -> installed model transforms",
+    "action": "native OSC end-effector delta + gripper; consumer robots/libero/env_server.py",
+    "units_and_scaling": "RPent LIBERO native action spec; not Piper joint commands"
+  },
+  "historical_evidence": {
+    "path": "RPent/logs/smoke-20261109-222602",
+    "reasoning_effort": "low",
+    "supports": "matched installation/interfaces and observed scene only; not medium ability baseline"
+  },
+  "changed_configuration": "Shared native action and stream closure fixes plus read audit/reparse consumption; runtime policy/model/processor/input/collection unchanged.",
+  "dependency_snapshot": "config/runtime_observed_v1.json",
+  "research_llm": {
+    "backend": "codex",
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "high",
+    "effective_value_recording": "request options and backend evidence separately; null until actual call"
+  },
+  "authorization_reference": "/home/xzh/RSI-Agent-VLA/artifacts/release-20261112-repair05-seed3/authorization.json",
+  "token_policy": "observed_only",
+  "model_requests_per_attempt": 20,
+  "request_transport": "local pre-forward HTTP admission -> native Codex upstream; same gpt-6.1-sol/medium",
+  "auxiliary_models": {
+    "sam3_checkpoint": "/home/wd/下载/sam3.pt",
+    "sam3_revision": null,
+    "openpi_data_home": "/home/xzh/.cache/openpi",
+    "source": "previously verified config/models.local.sh; no new weight download"
+  },
+  "execution_version": "bounded-vla-v1",
+  "planner_observation": {
+    "image_detail": "calibrated",
+    "fallback": "view_env_state(image_detail=\"full\")"
+  },
+  "vla_segment": {
+    "tool": "vla_execute",
+    "max_chunks_range": [
+      1,
+      24
+    ],
+    "provisional_first_segment_max_chunks": 24,
+    "action_steps_per_chunk": 5
+  },
+  "code_ref": "aggregate-5a-native-stream-closure-repair05",
+  "task_inputs": {
+    "base_salad": {
+      "version": "libero-startup-v2-bounded-vla",
+      "task_language": "Pick the salad dressing and place it in the basket",
+      "source": "pilot_v9 task language; runtime step0 authoritative; evaluation adaptation draft",
+      "task_scope": {
+        "suite": "libero_object",
+        "task": 2
+      }
+    },
+    "position_swap_salad": {
+      "version": "libero-startup-v2-bounded-vla",
+      "task_language": "Pick the salad dressing and place it in the basket",
+      "source": "pilot_v9 task language; runtime step0 authoritative; evaluation adaptation draft",
+      "task_scope": {
+        "suite": "libero_object_swap",
+        "task": 2
+      }
+    },
+    "old_milk": {
+      "version": "libero-startup-v2-bounded-vla",
+      "task_language": "Pick the milk and place it in the basket",
+      "source": "pilot_v9 task language; runtime step0 authoritative; evaluation adaptation draft",
+      "task_scope": {
+        "suite": "libero_object",
+        "task": 7
+      }
+    },
+    "old_drawer": {
+      "version": "libero-startup-v2-bounded-vla",
+      "task_language": "Open the middle layer of the drawer",
+      "source": "pilot_v9 task language; runtime step0 authoritative; evaluation adaptation draft",
+      "task_scope": {
+        "suite": "libero_goal",
+        "task": 0
+      }
+    }
+  },
+  "profile_status": "new authorized one-development attempt, select GPU0/1, no Research or release",
+  "collection": {
+    "enabled": true,
+    "version": "aligned-batches-v1",
+    "relative_root": "data",
+    "flush_steps": 25,
+    "required_for_release": false,
+    "nonintervention": "identical collection for baseline and candidate",
+    "required_for_development": true,
+    "l0_required_for_release": true,
+    "requirements": "Necessary L0 remains mandatory for release. Auxiliary training collection is optional for future release; this development pilot requires full aligned collection. Optional collection failures are not dynamically accepted by this preparation."
+  },
+  "release_authorized": true
+}

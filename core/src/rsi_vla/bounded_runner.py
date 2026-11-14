@@ -4,9 +4,12 @@ import json
 import os
 import sys
 import time
+from dataclasses import asdict, replace
 from pathlib import Path
-from .storage import atomic_json
+
+from .phase_receipts import read_phase, write_phase
 from .research_transport import model_prompt, unpack
+from .storage import atomic_json
 
 
 def read(path):
@@ -15,12 +18,17 @@ def read(path):
 
 def validate_permit(tools, transport, permit, *, root, output):
     """Match full input and current source bytes, not an old authorization boolean."""
+    from .task_policy import task_policy
+
     request = unpack(transport)
+    if request.get("task_policy", {}) != task_policy(tools.protocol):
+        raise PermissionError("prepared task policy changed; prepare a new request")
     if (
-        request.get("job_id") != tools.job.state["job_id"]
+        request.get("base_bundle") != asdict(tools.base)
+        or request.get("job_id") != tools.job.state["job_id"]
         or request.get("bundle_id") != tools.base.bundle_id
         or request.get("model") != "gpt-6.1-sol"
-        or request.get("reasoning_effort") != "medium"
+        or request.get("reasoning_effort") != "high"
         or tools.store.get("bounded_transports", request["request_id"]) != transport
     ):
         raise PermissionError(
@@ -35,7 +43,7 @@ def validate_permit(tools, transport, permit, *, root, output):
         "protocol_id": tools.protocol["protocol_id"],
         "output_dir": str(Path(output).resolve()),
         "model": "gpt-6.1-sol",
-        "reasoning_effort": "medium",
+        "reasoning_effort": "high",
         "input": transport,
         "job_limits": tools.job.state["limits"],
     }
@@ -43,12 +51,21 @@ def validate_permit(tools, transport, permit, *, root, output):
         raise PermissionError(
             "permit does not match new job/bundle/protocol/input/output/budget"
         )
+    from .task_policy import number
+
+    proposal = task_policy(tools.protocol).get(
+        "research_per_request", {"wall_seconds": 300, "storage_bytes": 10485760}
+    )
+    wall_cap = number(proposal["wall_seconds"], "Research wall cap")
+    storage_cap = number(proposal["storage_bytes"], "Research storage cap")
     limits = permit["limits"]
     if (
         set(limits) != {"model_requests", "wall_seconds", "storage_bytes"}
         or limits["model_requests"] != 1
-        or not 0 < limits["wall_seconds"] <= 300
-        or not 0 < limits["storage_bytes"] <= 10485760
+        or not 0 < number(limits["wall_seconds"], "Research wall limit") <= wall_cap
+        or not 0
+        < number(limits["storage_bytes"], "Research storage limit")
+        <= storage_cap
     ):
         raise PermissionError("permit exceeds the one-request Research proposal")
     for k, jk in (
@@ -58,7 +75,11 @@ def validate_permit(tools, transport, permit, *, root, output):
     ):
         if limits[k] > tools.job.remaining().get(jk, 0):
             raise PermissionError("original job budget insufficient")
-    phase = read(permit["phase_snapshot_ref"])
+    phase = read_phase(permit["phase_snapshot_ref"])
+    if phase.get("unresolved_costs"):
+        raise PermissionError(
+            "phase actual costs unresolved; reconcile before Research"
+        )
     if any(
         limits[k] > phase["remaining"][pk]
         for k, pk in (
@@ -69,7 +90,10 @@ def validate_permit(tools, transport, permit, *, root, output):
     ):
         raise PermissionError("remaining original phase budget insufficient")
     manifest = read(permit["source_manifest_ref"])
-    if manifest.get("version") != "batch4-preparation" or not manifest.get("files"):
+    if manifest.get("version") not in {
+        "batch4-preparation",
+        "5a-assets-offline",
+    } or not manifest.get("files"):
         raise PermissionError("new source manifest required")
     for name in manifest["files"]:
         if (Path(root) / name).read_bytes() != (
@@ -79,15 +103,36 @@ def validate_permit(tools, transport, permit, *, root, output):
     return request
 
 
+def _research_codex_config(output):
+    """Keep SDK plugin discovery out of the bounded Research child."""
+    from rpent.planner.codex import build_codex_config
+
+    config = build_codex_config(
+        mcp_url=None, base_url=None, api_key=None, cwd=str(output)
+    )
+    return replace(
+        config,
+        config_overrides=(
+            *config.config_overrides,
+            "features.plugins=false",
+            "features.remote_plugin=false",
+        ),
+    )
+
+
 def child(output):
     """Actual SDK consumer of the compact full-fact transport; never used by offline tests."""
     import openai_codex
-    from rpent.planner.codex import ReasoningEffort, build_codex_config
+    from rpent.planner.codex import ReasoningEffort
 
     output = Path(output)
     context = read(output / "runtime_context.json")
     permit = read(context["authorization_ref"])
     transport = read(output / "request.json")
+    if unpack(transport)["reasoning_effort"] != "high":
+        raise PermissionError(
+            "new Research dispatch requires high; historical responses may only be reconciled"
+        )
     if (
         not permit.get("authorized")
         or permit.get("input") != transport
@@ -101,9 +146,7 @@ def child(output):
     atomic_json(
         output / "child-started.json", {"request_id": unpack(transport)["request_id"]}
     )
-    config = build_codex_config(
-        mcp_url=None, base_url=None, api_key=None, cwd=str(output)
-    )
+    config = _research_codex_config(output)
     with openai_codex.Codex(config=config) as client:
         thread = client.thread_start(
             model="gpt-6.1-sol",
@@ -114,7 +157,7 @@ def child(output):
         result = thread.turn(
             model_prompt(transport),
             model="gpt-6.1-sol",
-            effort=ReasoningEffort.medium,
+            effort=ReasoningEffort.high,
             output_schema=read(output / "response-schema.json"),
         ).run()
     atomic_json(
@@ -126,7 +169,7 @@ def child(output):
     )
 
 
-def reconcile(tools, adapter, output, *, cost_limit):
+def _reconcile(tools, adapter, output, *, cost_limit):
     """Reparse existing response and usage; idempotent charge even after schema errors."""
     output = Path(output)
     transport = read(output / "request.json")
@@ -174,7 +217,7 @@ def reconcile(tools, adapter, output, *, cost_limit):
     # Charge the existing phase exactly once, including failed requests/startup.
     permit = read(context["authorization_ref"])
     phase_path = Path(permit["phase_snapshot_ref"])
-    phase = read(phase_path)
+    phase = read_phase(phase_path)
     phase_costs = {
         "wall_seconds": costs["whole_job_wall_seconds"],
         "model_requests": len(admitted),
@@ -182,9 +225,8 @@ def reconcile(tools, adapter, output, *, cost_limit):
         "environment_steps": 0,
         "gpu_seconds": 0,
         "simulation_episodes": 0,
-        "storage_bytes": sum(
-            p.stat().st_size for p in output.rglob("*") if p.is_file()
-        ),
+        # Match the job's raw measurement; finish() books subsequent output growth.
+        "storage_bytes": costs["artifact_bytes"],
     }
     existing = [
         c
@@ -209,7 +251,7 @@ def reconcile(tools, adapter, output, *, cost_limit):
         for k, v in phase_costs.items():
             phase["used"][k] += v
             phase["remaining"][k] = max(0, phase["limits"][k] - phase["used"][k])
-        atomic_json(phase_path, phase)
+        write_phase(phase_path, phase)
     if (
         costs["whole_job_wall_seconds"] > context["limits"]["wall_seconds"]
         or costs.get("artifact_bytes", 0) > context["limits"]["storage_bytes"]
@@ -240,6 +282,45 @@ def reconcile(tools, adapter, output, *, cost_limit):
     return result
 
 
+def reconcile(tools, adapter, output, *, cost_limit):
+    from .artifact_accounting import begin, finish
+
+    output = Path(output)
+    request = unpack(read(output / "request.json"))
+    if (
+        request.get("job_id") != tools.job.state["job_id"]
+        or request.get("bundle_id") != tools.base.bundle_id
+        or tools.store.get("bounded_transports", request["request_id"])
+        != read(output / "request.json")
+    ):
+        raise ValueError("reconciliation input belongs to another job")
+    key = request["request_id"] + "-derived"
+    begin(tools, key)
+    context = read(output / "runtime_context.json")
+    permit = read(context["authorization_ref"])
+    try:
+        return _reconcile(tools, adapter, output, cost_limit=cost_limit)
+    finally:
+        measurement = read(output / "execution-costs.json")
+        costs = measurement["costs"]
+        accounting = finish(
+            tools,
+            key,
+            phase_path=permit["phase_snapshot_ref"],
+            output=output,
+            billed_output_bytes=measurement.get(
+                "raw_output_bytes_at_measurement", costs.get("artifact_bytes")
+            ),
+        )
+        if (
+            costs.get("artifact_bytes", 0) + accounting["booked_bytes"]
+            > context["limits"]["storage_bytes"]
+        ):
+            raise RuntimeError(
+                "Research output and derived evidence exceed storage bound; retained, no new dispatch"
+            )
+
+
 def execute(
     tools,
     adapter,
@@ -258,10 +339,30 @@ def execute(
     request = validate_permit(
         tools, transport, read(permit_path), root=root, output=output
     )
-    if not any(row["currently_trialable"] for row in preflight):
+    diagnostic = unpack(transport).get("research_mode") == "technical_diagnostic"
+    goal_only = request.get("opportunity_only") is True
+    if goal_only and (request.get("task_policy", {}).get("opportunity_discovery") is not True
+                      or tools.domain_policy.get("opportunity_only") is not True
+                      or request.get("allowed_operators")):
+        raise PermissionError("goal-only dispatch requires registered discovery and no trial operators")
+    if diagnostic:
+        request = unpack(transport)
+        if not tools.domain_policy.get("diagnostic_scope_approved") or not any(
+            r["invalid_count"] and r["data_refs"] for r in request["evidence"]
+        ):
+            raise PermissionError(
+                "diagnosis needs approved scope and legal technical evidence"
+            )
+    if not diagnostic and not goal_only and not any(row["currently_trialable"] for row in preflight):
         raise PermissionError(
             "no executable evidenced operator; do not spend Research allowance"
         )
+    if not diagnostic and not goal_only:
+        trialable = {row["operator"] for row in preflight if row["currently_trialable"]}
+        if not set(unpack(transport)["allowed_operators"]) <= trialable:
+            raise PermissionError(
+                "actual request operators exceed approved feasible preflight"
+            )
     if gate_factory is None:
         from .adapters.request_gate import RequestGate
 
@@ -286,15 +387,20 @@ def execute(
         "gpu_count": 0,
         "dynamic_authorized": True,
         "authorization_ref": str(Path(permit_path).resolve()),
-        "planner": {"model": "gpt-6.1-sol", "reasoning_effort": "medium"},
+        "planner": {"model": "gpt-6.1-sol", "reasoning_effort": "high"},
         "limits": permit["limits"],
+        "storage_write_roots": permit.get("storage_write_roots", [str(output)]),
     }
     with lock_factory():
+        from .process_accounting import StorageMeter
+
+        storage_meter = StorageMeter(context["storage_write_roots"])
+        context["storage_baseline"] = storage_meter.baseline
         output.mkdir(parents=True, exist_ok=False)
         atomic_json(output / "request.json", transport)
         atomic_json(
             output / "response-schema.json",
-            adapter.response_schema(request["request_id"]),
+            adapter.response_schema(request["request_id"], tools=tools),
         )
         atomic_json(
             output / "dispatch.json",
@@ -317,7 +423,7 @@ def execute(
                     context_path=output / "runtime_context.json",
                 )
                 atomic_json(output / "supervisor.json", report)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - preserve supervisor interruption and all measured costs
             atomic_json(
                 output / "supervisor.json",
                 {
@@ -365,13 +471,17 @@ def execute(
                 ]
                 if all(type(v) is int for v in cached):
                     costs["cached_input_tokens"] = sum(cached)
-            costs["artifact_bytes"] = sum(
-                p.stat().st_size for p in output.rglob("*") if p.is_file()
+            from .process_accounting import accounted_storage_bytes, snapshot
+
+            costs["artifact_bytes"] = max(
+                accounted_storage_bytes(output),
+                storage_meter.sample()["cumulative_new_bytes_lower_bound"],
             )
             atomic_json(
                 output / "execution-costs.json",
                 {
                     "costs": costs,
+                    "raw_output_bytes_at_measurement": sum(snapshot([output]).values()),
                     "usage_complete": complete,
                     "cached_is_input_subset": True,
                     "missing_usage": "retain unknown; do not fill zero"

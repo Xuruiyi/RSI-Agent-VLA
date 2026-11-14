@@ -305,7 +305,7 @@ class RunnerTest(unittest.TestCase):
         )
         self.tools.job = self.job
         self.tools.domain_policy["rule_operators"] = ["chunk_steps"]
-        adapter = BoundedResearchAdapter(model="gpt-6.1-sol", reasoning_effort="medium")
+        adapter = BoundedResearchAdapter()
         transport = adapter.prepare_request(
             self.tools,
             request_id="new-request",
@@ -344,7 +344,7 @@ class RunnerTest(unittest.TestCase):
             "protocol_id": self.protocol["protocol_id"],
             "output_dir": str(output),
             "model": "gpt-6.1-sol",
-            "reasoning_effort": "medium",
+            "reasoning_effort": "high",
             "input": transport,
             "job_limits": self.job.state["limits"],
             "limits": {
@@ -412,7 +412,7 @@ class RunnerTest(unittest.TestCase):
                 {
                     "kind": "request_admitted",
                     "model": "gpt-6.1-sol",
-                    "reasoning_effort": "medium",
+                    "reasoning_effort": "high",
                 },
                 {
                     "kind": "response_terminal",
@@ -432,24 +432,40 @@ class RunnerTest(unittest.TestCase):
             root=self.root,
             output=output,
             permit_path=path,
-            preflight=[{"currently_trialable": True}],
+            preflight=[
+                {"operator": op, "currently_trialable": True}
+                for op in self.tools.domain_policy["rule_operators"]
+            ],
             cost_limit={},
             gate_factory=Gate,
             supervisor=supervisor,
             lock_factory=nullcontext,
         )
         self.assertEqual(result["action"], "defer")
-        self.assertEqual(len(self.job.state["charges"]), 1)
+        phase = json.loads((self.root / "phase.json").read_text())
+        self.assertEqual(
+            phase["used"]["storage_bytes"], self.job.state["used"]["artifact_bytes"]
+        )
+        self.assertEqual(
+            sum(c["reason"].startswith("llm ") for c in self.job.state["charges"]), 1
+        )
         saved = json.loads((output / "sdk-result.json").read_text())
         atomic_json(
             output / "sdk-result.json", {**saved, "final_response": "{malformed"}
         )
         with self.assertRaises(ValueError):
             reconcile(self.tools, adapter, output, cost_limit={})
-        self.assertEqual(len(self.job.state["charges"]), 1)
+        self.assertEqual(
+            sum(c["reason"].startswith("llm ") for c in self.job.state["charges"]), 1
+        )
         atomic_json(output / "sdk-result.json", saved)
         reconcile(self.tools, adapter, output, cost_limit={})
-        self.assertEqual(len(self.job.state["charges"]), 1)
+        charged = json.loads(json.dumps(self.job.state["charges"]))
+        reconcile(self.tools, adapter, output, cost_limit={})
+        self.assertEqual(self.job.state["charges"], charged)
+        self.assertEqual(
+            sum(c["reason"].startswith("llm ") for c in self.job.state["charges"]), 1
+        )
         self.assertEqual(
             len(json.loads((self.root / "phase.json").read_text())["research_charges"]),
             1,
@@ -462,9 +478,75 @@ class RunnerTest(unittest.TestCase):
                 root=self.root,
                 output=output,
                 permit_path=path,
-                preflight=[{"currently_trialable": True}],
+                preflight=[
+                    {"operator": op, "currently_trialable": True}
+                    for op in self.tools.domain_policy["rule_operators"]
+                ],
                 cost_limit={},
             )
+
+    def test_high_child_uses_actual_sdk_effort_without_network(self):
+        from types import SimpleNamespace
+        from openai_codex import CodexConfig
+        from rsi_vla.bounded_runner import child
+
+        adapter, transport, output, permit, path = self.prepared()
+        output.mkdir()
+        atomic_json(output / "runtime_context.json", {"authorization_ref": str(path)})
+        atomic_json(output / "request.json", transport)
+        atomic_json(output / "dispatch.json", {"request_id": "new-request"})
+        atomic_json(
+            output / "response-schema.json", adapter.response_schema("new-request")
+        )
+        captured = {}
+
+        class Client:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def thread_start(self, **kwargs):
+                captured["thread"] = kwargs
+                return self
+
+            def turn(self, prompt, **kwargs):
+                captured["turn"] = kwargs
+                return self
+
+            def run(self):
+                return SimpleNamespace(status="completed", final_response="{}")
+
+        with (
+            patch("openai_codex.Codex", Client),
+            patch("rpent.planner.codex.build_codex_config", return_value=CodexConfig()),
+        ):
+            child(output)
+        self.assertEqual(captured["turn"]["effort"].value, "high")
+        self.assertEqual(captured["turn"]["model"], "gpt-6.1-sol")
+        self.assertEqual(captured["thread"]["model"], "gpt-6.1-sol")
+
+    def test_medium_prepared_input_cannot_be_dispatched_as_a_new_request(self):
+        _, transport, output, permit, path = self.prepared()
+        request = unpack(transport)
+        request.update(request_id="historical-medium", reasoning_effort="medium")
+        historical = pack(request)
+        self.store.put("bounded_transports", "historical-medium", historical)
+        old_permit = {
+            **permit,
+            "request_id": "historical-medium",
+            "reasoning_effort": "medium",
+            "input": historical,
+        }
+        with self.assertRaises(PermissionError):
+            validate_permit(
+                self.tools, historical, old_permit, root=self.root, output=output
+            )
+        self.assertFalse(output.exists())
 
     def test_old_mismatched_permit_and_source_refused(self):
         adapter, transport, output, permit, path = self.prepared()

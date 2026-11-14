@@ -24,6 +24,26 @@ their current commands and prerequisites; reuse existing runners and fixtures.
   tests documented in the test guide. Check GPU, assets, checkpoint, and
   platform prerequisites before launching them.
 
+## Choose scope and environment
+
+Use the changed behavior and its callers to select a focused set. A shared
+contract change can justify broader integration checks; the full pre-PR checks
+below remain required. Do not run a whole suite solely because a small edit
+followed an already successful run. Recheck the affected behavior after that edit.
+
+Reuse known environment evidence while it remains valid. Loopback/socket tests
+need an environment that permits local sockets; role-isolation tests need the
+supported namespace mechanism and a source/interpreter path visible inside it.
+A `/tmp` source checkout can be hidden when an isolation test mounts scratch at
+`/tmp`. Run such tests from their intended checkout. An unavailable prerequisite
+is not a product regression; repair that prerequisite or report the precise gap.
+Do not skip required checks or relax assertions to obtain a pass.
+
+Record commands, outcomes and material gaps once in the existing owning record.
+Ordinary checking does not require another manifest, proof file, review agent or
+reconstruction of unrelated historical costs. Finish when the requested change
+and its applicable checks are complete.
+
 ## Run existing commands
 
 Use an isolated environment as described in CONTRIBUTING. Before opening a PR,

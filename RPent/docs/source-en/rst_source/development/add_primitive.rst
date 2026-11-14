@@ -25,8 +25,7 @@ Two Types of Primitives
        (kinematic / heuristic)
      - Runs in the agent process, with an optional server-side RPC for
        kinematics. It does not load model weights.
-     - ``move_to``, ``rotate_wrist``, ``release``,
-       ``back_project``
+     - ``move_to``, ``rotate_wrist``, ``release``
 
 From the LLM's perspective, both types expose the same interface: a
 tool schema, a primitives method, and a state dump after the
@@ -49,7 +48,7 @@ Declare the method on the robot's primitives class and register its bound tool:
            Args:
                dx: Pull distance in meters.
            """
-           self._env.step(build_open_drawer_chunk(dx))
+           self._env.chunk_step(build_open_drawer_chunk(dx))
            return ToolResult(data={"ok": True, "dx": dx})
 
    # In the toolkit, after constructing self._primitives:

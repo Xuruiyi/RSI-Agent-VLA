@@ -8,19 +8,39 @@ class EventLedger:
         self.store = store
 
     def append(self, event):
-        self.store.get("bundles", event.active_bundle)
+        return self.append_many([event])[0]
+
+    def append_many(self, events):
+        """Append an ordered batch with the same identity checks as single facts.
+
+        Build the episode-sequence index once per batch. The store has one
+        writer; a later call rebuilds from disk, including another ledger's
+        completed writes. An interrupted prefix remains safe to import again.
+        """
+        by_sequence = {}
         for old in self.store.all("events"):
-            if (old["run_id"], old["episode_id"], old["sequence"]) == (event.run_id, event.episode_id, event.sequence) and old["event_id"] != event.event_id:
+            key = (old["run_id"], old["episode_id"], old["sequence"])
+            by_sequence.setdefault(key, set()).add(old["event_id"])
+        appended = []
+        for event in events:
+            self.store.get("bundles", event.active_bundle)
+            key = (event.run_id, event.episode_id, event.sequence)
+            identities = by_sequence.get(key, set())
+            if identities and identities != {event.event_id}:
                 raise ValueError("conflicting episode event sequence")
-        return self.store.put("events", event.event_id, event)
+            appended.append(self.store.put("events", event.event_id, event))
+            by_sequence.setdefault(key, set()).add(event.event_id)
+        return appended
 
     def view(self, view_id, bundle_id, selected_media=None, policy_ref="fixed-all"):
         facts = [e for e in self.store.all("events") if e["active_bundle"] == bundle_id]
         facts.sort(key=lambda e: (e["run_id"], e["episode_id"], e["sequence"]))
-        available = {media for e in facts for media in e["media"]}
-        chosen = sorted(available if selected_media is None else set(selected_media))
-        if not set(chosen) <= available:
-            raise ValueError("media outside legal recorded facts")
+        from .relation_learning import select_media
+        bundle = self.store.get("bundles", bundle_id)
+        rho = self.store.get("rho", bundle["rho_ref"])
+        chosen = select_media(rho["rhoA"], facts, selected_media)
+        if rho["rhoA"].get("type") != "fixed" and policy_ref == "fixed-all":
+            policy_ref = bundle["rho_ref"]
         # The only selection operation is on L1. Every original L0 field remains.
         return EvidenceView(view_id, bundle_id, facts, chosen, policy_ref)
 

@@ -18,7 +18,8 @@ def offline_protocol():
             "benchmark_id": "fixture-v1", "anchor_bundle_id": "initial",
             "metrics": {"success": {"min": 0, "max": 1, "direction": "max", "weight": 1}},
             "hard_constraints": {"safety": "fixture safe", "compatibility": "fixture compatible"},
-            "min_gain": .1, "anchor_max_drop": .05, "cost_weights": {}}
+            "min_gain": .1, "anchor_max_drop": .05, "cost_weights": {},
+            "initial_requirements":{"metric_minima":{"success":.5},"required_old_tasks":[]}}
 
 
 class CoreTest(unittest.TestCase):
@@ -41,6 +42,9 @@ class CoreTest(unittest.TestCase):
         self.evals.put("protocols", self.p["protocol_id"], self.p)
         self.release = ReleaseManager(self.root / "release", self.store, self.evals)
         self.release.bootstrap("initial")
+        self.evals.save_result(self.result("initial-qualified", "initial", .5))
+        self.release.qualify_initial("initial-qualified", result_id="initial-qualified")
+        self.release.establish_initial("initial-qualified",safe_point="task_boundary",queues_empty=True)
 
     def result(self, key="candidate-result", bundle="candidate-bundle", success=.9, **changes):
         result = ExperimentResult(key, bundle, "offline-test", "fixture-v1", "release", "offline",

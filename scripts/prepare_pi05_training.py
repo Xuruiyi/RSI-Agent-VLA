@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--permit")
     parser.add_argument("--metadata-root")
     parser.add_argument("--subset-output")
+    parser.add_argument("--max-subset-frames", type=int, default=4000)
+    parser.add_argument("--max-subset-bytes", type=int, default=2 * 1024**3)
     args = parser.parse_args()
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
@@ -44,8 +46,15 @@ def main():
             else:
                 if not args.metadata_root or not args.subset_output:
                     raise ValueError("demonstration acquisition requires --metadata-root and --subset-output")
+                if args.max_subset_frames <= 0 or args.max_subset_bytes <= 0:
+                    raise ValueError("subset limits must be positive before acquisition")
+                for key, proposed in [('max_subset_frames', args.max_subset_frames),
+                                      ('max_subset_bytes', args.max_subset_bytes)]:
+                    if key in permit and proposed > permit[key]:
+                        raise ValueError("subset proposal exceeds permit: " + key)
                 acquire_demonstration_files(args.metadata_root, output, permit)
-                report = materialize_demonstration_subset(args.metadata_root, output, args.subset_output)
+                report = materialize_demonstration_subset(args.metadata_root, output, args.subset_output,
+                    max_frames=args.max_subset_frames, max_output_bytes=args.max_subset_bytes)
         print(json.dumps(report, indent=2))
         return
     if not args.model_path or not args.norm_stats_path:

@@ -22,8 +22,7 @@
        （运动学 / 启发式）
      - 在 agent 进程内运行；需要进行运动学计算时，可能通过一次
        server 侧 RPC 完成。不需要加载模型权重。
-     - ``move_to``、``rotate_wrist``、``release``、
-       ``back_project``
+     - ``move_to``、``rotate_wrist``、``release``
 
 从 LLM 的视角看，两类原语采用相同的接口：一份工具定义、一个 primitives 方法，以及调用完成后的状态快照。区别仅在于方法的具体实现。
 
@@ -44,7 +43,7 @@
            Args:
                dx: Pull distance in meters.
            """
-           self._env.step(build_open_drawer_chunk(dx))
+           self._env.chunk_step(build_open_drawer_chunk(dx))
            return ToolResult(data={"ok": True, "dx": dx})
 
    # 在 toolkit 中构造 self._primitives 后注册：
@@ -84,4 +83,4 @@ mixin 覆盖的 ``serve`` 与 :class:`~rpent.utils.rpc.RpcFacade` 的 ``serve`` 
 - **工具名称应描述意图，而非底层动作序列。** 例如使用 ``pi0_pick``，而不是 ``execute_action_chunk_of_length_20``。
 - **改变状态的工具在返回规划器前采集状态。** Toolkit 在处理函数执行后调用 ``get_env_state``，期间继续保持独占执行。``readonly`` 工具跳过这一步，并可与其他只读工具并行。
 - **保持结果数据简短。** 返回值会以文本形式提供给 LLM；图像、深度数据和其他大型观测应通过 ``EnvState.save`` 保存；``EnvState`` 会把每个逻辑基础文件名自动加入其持有的 ``StepRecord.artifacts`` 集合。图像通过 ``view_env_state`` 提供，几何数据通过环境工具访问，不返回原始路径。
-- **安全限制由 ``env_server`` 强制执行。** LLM 可能使用任意参数调用工具，因此工作空间边界和安全限制不能只依赖 toolkit。
+- 安全限制由 ``env_server`` 强制执行。 LLM 可能使用任意参数调用工具，因此工作空间边界和安全限制不能只依赖 toolkit。

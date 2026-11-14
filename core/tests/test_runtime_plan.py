@@ -36,6 +36,12 @@ class RuntimePlanTests(unittest.TestCase):
         command = plan['command']
         self.assertEqual(command[command.index('--reasoning-effort') + 1], 'medium')
         self.assertEqual(plan['context']['bundle_id'], 'initial-medium')
+        binding = plan['context']['execution_binding']
+        store = ResearchStore(self.artifacts / 'research')
+        self.assertEqual(binding['bundle'], store.get('bundles', 'initial-medium'))
+        self.assertEqual(binding['profile']['planner'], plan['context']['planner'])
+        self.assertEqual(binding['candidates'], [])
+        self.assertEqual(binding['references']['phi_ref'], binding['profile']['control'])
         self.assertIsNone(plan['model_configuration']['effective'])
         self.assertFalse((self.artifacts / 'run').exists())
         with self.assertRaisesRegex(RuntimeError, 'authorization missing'):
@@ -56,7 +62,7 @@ class RuntimePlanTests(unittest.TestCase):
         profile = json.loads(path.read_text())
         profile['planner']['reasoning_effort'] = 'low'
         path.write_text(json.dumps(profile))
-        with self.assertRaisesRegex(ValueError, 'must explicitly use'):
+        with self.assertRaisesRegex(ValueError, 'planner model/effort does not match the supported role settings'):
             self.plan()
 
     def test_shared_dynamic_slot_is_exclusive(self):
@@ -124,7 +130,8 @@ class Tool60PlanTests(unittest.TestCase):
             permit={key:plan['context'][key] for key in ('run_id','bundle_id','protocol_id','gpu_devices')}
             permit.update(authorized=True,task_key='position_swap_salad',seed=1,simulation_episodes=1,
                           limits={**plan['context']['limits'],'tool_calls':17,'environment_steps':100})
-            authorization=root/'permit.json';authorization.write_text(json.dumps(permit))
+            authorization=root/'permit.json'
+            authorization.write_text(json.dumps(permit))
             bounded=prepare_runtime(ROOT,d,authorization_path=authorization,**kwargs)
             self.assertEqual(bounded['context']['limits']['tool_calls'],17)
             self.assertEqual(bounded['command'][bounded['command'].index('--max-episode-steps')+1],'100')

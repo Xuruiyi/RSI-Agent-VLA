@@ -11,7 +11,7 @@
 
 因此，``--planner flash`` 不会调用 LLM 重新规划动作。Molmo 在这里只负责视觉定位：它在相机画面中指出指定的物体或位置，RPent 再将该像素转换成当前场景坐标。
 
-先完成 :doc:`../get_started/quickstart` 的 LIBERO-PRO 安装与模型配置。以下流程执行已有计划；生成新计划的方法在后文。
+本页说明 LIBERO-PRO 的 Flash 重放。单臂和双臂 Franka 使用 :ref:`经审核的任务卡流程 <franka-flash>`。使用 LIBERO 时，先完成 :doc:`../get_started/quickstart`，再按下文执行已有计划。
 
 计划文件
 ------------

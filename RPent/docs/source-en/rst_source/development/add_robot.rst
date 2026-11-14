@@ -353,7 +353,7 @@ Conventions Worth Keeping
 Robot-specific CLI arguments enter ``rpent/cli/main.py`` through two
 hooks and participate in the final argparse pass:
 
-**``_add_cli_args(parser, use_dashboard) -> None``.** Register the
+``_add_cli_args(parser, use_dashboard) -> None``. Register the
 robot's arguments on the shared parser created by main.py.
 ``use_dashboard`` determines whether normally required arguments remain
 optional. For each Dashboard TaskRun, the robot's Dashboard task command
@@ -361,7 +361,7 @@ supplies the fields declared by its spec before ``parse_config`` runs. main.py
 calls this hook before ``parser.parse_args()``, so argparse's usage and error
 output includes the robot arguments.
 
-**``_parse_config(args) -> RunConfig``.** In normal CLI mode, this is called
+``_parse_config(args) -> RunConfig``. In normal CLI mode, this is called
 after ``parser.parse_args()``. In Dashboard mode, it is called for each
 TaskRun after the requested fields have been copied to the task arguments. It
 validates those fields and returns a
@@ -438,8 +438,7 @@ Optional Run-result Finalizer
 -----------------------------
 
 ``RobotSpec.finalize_run`` is a universal, robot-agnostic end-of-run hook.
-RoboCasa is its current consumer and uses it to record per-cell evaluation
-results for later statistics and aggregation. Any robot that publishes
+LIBERO, RoboCasa, RoboDojo, and YAM use it to write evaluation results. Any robot that publishes
 machine-readable evaluation artifacts may register the hook. The default is
 ``None`` and leaves the runner unchanged. When the hook is present, the normal
 terminal runner captures ``toolkit.solved()`` before closing the toolkit, then

@@ -39,7 +39,7 @@
      - 仅 ``api``：每次模型回复的 Token 上限。
    * - ``--reasoning-effort``
      - ``api``：``high``；``claude_code``/``codex``：``none``
-     - ``api``、``claude_code`` 与 ``codex`` 的推理强度：``none``、``low``、``medium``、``high`` 或 ``xhigh``。在我们的 LIBERO Pro Long 评测中，关闭 reasoning 将平均运行时间从约 13.2 分钟缩短至 7.9 分钟（约 40%）。较高强度可能提升任务成功率；实际支持的档位取决于所选模型。
+     - ``none``、``low``、``medium``、``high`` 或 ``xhigh``，支持范围取决于模型。实测耗时与 token 开销见 :doc:`../leaderboard/time-token-costs`。
    * - ``--planner-timeout-s``
      - ``—``
      - 默认使用 ``CODEX_TIMEOUT_S`` （仅 Codex）、``CELL_TIMEOUT_S`` 或 1200 秒；终端交互式 API/Claude 会话不受此限。
@@ -89,7 +89,7 @@
 环境参数
 ------------
 
-LIBERO 使用 ``--suite``、``--task``、``--seed`` 和 ``--libero-type`` 选择任务；默认类型为 ``LIBERO_TYPE`` 或 ``pro``。RoboCasa365 和 RoboTwin 使用 ``--task-name``。Franka 使用 ``--task-id`` 和 ``--robot-config``。具体选项见 :doc:`../simulators/libero`、:doc:`../simulators/robocasa`、:doc:`../simulators/robotwin`、:doc:`../real_world_robots/franka` 和 :doc:`../real_world_robots/dual_franka`。
+LIBERO 通过 ``--suite``、``--task``、``--seed`` 和 ``--libero-type`` 选择任务。变体依次取自 ``--libero-type``、``LIBERO_TYPE`` 和任务集推断：基础任务集使用 ``standard``，扰动任务集使用 ``pro``；扰动任务集必须使用 ``pro``。RoboCasa365 和 RoboTwin 使用 ``--task-name``。Franka 使用 ``--task-id`` 和 ``--robot-config``。具体选项见 :doc:`../simulators/libero`、:doc:`../simulators/robocasa`、:doc:`../simulators/robotwin`、:doc:`../real_world_robots/franka` 和 :doc:`../real_world_robots/dual_franka`。
 
 ``--env-endpoint``、``--am-endpoint`` 和 LIBERO 的 ``--sam3-endpoint`` 分别连接已有的环境、动作模型（VLA 或 WAM）和 SAM3 服务。RPent RPC 地址格式为 ``[protocol://]host:port``，默认协议为 ``http``；LingBot 使用原生 WebSocket，见 :doc:`../simulators/robotwin`。GPU 分配和远程服务见 :doc:`advanced_deployment`。
 
@@ -102,6 +102,8 @@ WAM 采用 ``local`` 记忆模式并注册记忆文件工具，默认目录按�
 ``--predict-future`` 在本地部署时开启未来状态和价值输出，目前仅 Cosmos Policy 支持，其他后端会拒绝此参数。使用 ``--am-endpoint`` 连接已有服务时，应在启动 worker 时配置。RPent 尚不利用这些输出进行规划。
 
 ``--am-cuda-device`` 独立选择本地模型的 GPU。LIBERO、RoboTwin、RoboCasa、RoboDojo 和 dual-Franka 支持本地模型部署；外部模型服务的 GPU 在部署时选择。LIBERO、RoboTwin、RoboCasa、RoboDojo 使用 ``--env-cuda-device`` 选择环境 GPU。LIBERO、RoboDojo 和 dual-Franka 使用 ``--sam3-cuda-device`` 选择本地 SAM3 的 GPU。
+
+启动本地服务时，按当前显存、负载和兼容性自主选择 GPU。示例中的设备编号可按实际情况替换，不限定后续运行的选卡范围。
 
 显存允许时，各服务可共用同一张 GPU。连接外部 endpoint 时，设备由该服务启动时的配置决定。
 
@@ -205,6 +207,8 @@ Codex 也可复用已有的 Codex 认证。模型选择、地址优先级和本�
      - 用途
    * - ``transcript_*.json``
      - 规划器对话、工具调用及结束信息。
+   * - ``result.json``
+     - 原生回合结果、规划器结束状态与运行错误；字段含义见 :doc:`../simulators/libero`。
    * - ``episode.mp4``
      - 本次任务的录像。
    * - ``run.log``

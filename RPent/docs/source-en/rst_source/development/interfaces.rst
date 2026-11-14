@@ -33,15 +33,12 @@ functions implemented in ``robot_spec.py`` for ``main.py`` to call:
    * - ``prompts``
      - A ``PromptBundle`` with ``system`` and ``user`` prompt factories (see
        ``robots/<robot>/prompt_bundle.py``).
-   * - ``dashboard``
-     - Optional Dashboard description. ``None`` disables Dashboard control for
-       the robot. Otherwise, the spec defines its task command and
-       fields, runtime components, and frame channels.
+   * - ``resolve_dashboard``
+     - Optional callback from parsed arguments to a ``DashboardSpec`` with task fields, runtime components, and primitive controls. ``None`` disables Dashboard support. Camera tabs come from recorded PNG artifacts.
    * - ``add_cli_args``
      - Register this robot's CLI flags (e.g. ``--suite``, ``--env-endpoint``).
    * - ``parse_config``
-     - Validate args and return ``RunConfig``; set at least ``recipe_tag``,
-       ``output_dir``, and ``prompt_vars`` for prompt templating.
+     - Validate arguments and return ``RunConfig`` with ``recipe_tag``, ``output_dir``, ``prompt_vars``, and ``task_desc``.
    * - ``init_runtime``
      - Start or attach to all runtime components, or to the component names in
        the optional selection, and build ``runtime_kwargs`` for them. The
@@ -101,8 +98,7 @@ allows concurrent readonly calls and skips post-action state capture. Handlers r
 ``data`` holds the JSON payload, including ``error`` or ``_finish`` when needed,
 and ``images`` holds PNG bytes.
 
-The base class registers common file tools when a memory manager is provided; call ``super().__init__()`` then
-``add_tool`` for robot tools. Per-step state and ``view_env_state`` are in
+A ``MemoryManager`` is required; the base class registers memory file tools and ``finish``. Pass it to ``super().__init__(...)``, then register robot tools with ``add_tool``. Per-step state and ``view_env_state`` are in
 :doc:`add_primitive`.
 
 Tools without ``readonly=True`` run exclusively, in admission order. Waiting

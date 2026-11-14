@@ -21,7 +21,7 @@ the next decision. The sequence below follows one run from CLI setup to cleanup.
 3. The runner synchronizes or uses local memory according to the profile, constructs the planner, and renders prompts.
 4. ``init_runtime`` starts or connects to services and returns runtime inputs and owned processes; ``get_toolkit`` creates tools and their memory manager.
 5. The planner obtains schemas through ``list_tools``, dispatches calls through ``execute_tool``, and consumes text and image results.
-6. Action tools call a VLA or scripted motion. The environment records updated state and observations for the next planning turn.
+6. Action tools call a VLA, WAM, or scripted motion. The environment records updated state and observations for the next planning turn.
 7. ``finish``, a run limit, or an error ends planning. The runner saves the transcript, finalizes recordings, and cleans up. Environments that publish evaluation artifacts use their finalization hook.
 
 ``finish`` marks the end of planning; success comes from the environment or a real-robot operator. See each environment guide for its criterion. The main entry point is ``rpent/cli/main.py``.
@@ -46,7 +46,7 @@ different robots.
      - Define schemas, dispatch calls, record state, and expose results as ``ToolResult`` for the planner.
    * - Environment service
      - Own the simulator or robot connection, execute actions, and expose native state and success information.
-   * - VLA / perception services
+   * - Action-model / perception services
      - Load models for action prediction, segmentation, and other capabilities selected by the environment.
    * - MemoryManager
      - Control memory reads and exploration writes, and manage merging and indexing.
@@ -71,12 +71,15 @@ Shared execution and interfaces live under ``rpent/``. Each package under
      tools/        # Toolkit and shared tool behavior
      memory/       # Memory permissions, merge, and indexing
      evaluation/   # Evaluation result support
+     flywheel/     # Trajectory storage, validation, export
    robots/
      libero/
      robocasa/
      robotwin/
+     robodojo/
      franka/
      dual_franka/
+     yam/
 
 Environment Discovery
 ---------------------
@@ -119,6 +122,8 @@ Choose the guide for the component you want to extend.
      - :doc:`add_robot`
    * - Expose an action or perception capability as a tool.
      - :doc:`add_primitive`
+   * - Connect a VLA or WAM service.
+     - :doc:`add_action_model`
    * - Add a planning backend.
      - :doc:`add_planner`
    * - Understand memory access and persistence.

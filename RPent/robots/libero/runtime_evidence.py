@@ -236,6 +236,9 @@ class _ObservedVectorEnv:
                         "robot0_eef_pos",
                         "robot0_eef_quat",
                         "robot0_gripper_qpos",
+                        "robot0_gripper_qvel",
+                        "robot0_joint_pos",
+                        "robot0_joint_vel",
                     )
                 }
                 for observation in raw_obs

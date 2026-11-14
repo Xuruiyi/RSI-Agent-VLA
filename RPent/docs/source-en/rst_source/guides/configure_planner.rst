@@ -37,12 +37,8 @@ loop is orchestrated, and which model SDK is used.
        Streamable HTTP MCP server that connects the toolkit to Codex.
      - Run tasks through the Codex SDK, using existing authentication or a configured API.
    * - ``flash``
-     - **Flash Mode**, for evaluation only. Replays a plan from memory,
-       recorded from an earlier
-       run, re-localizing each waypoint's anchor so the plan follows
-       objects that moved. See :doc:`flash`.
-     - You want to re-run a known-good plan on new layouts, without online
-       LLM planning. Perception and VLA services are still required.
+     - Replays a stored plan with fresh anchor localization: :doc:`LIBERO Flash Mode <flash>` or :ref:`Franka task cards <franka-flash>`.
+     - Repeat a reviewed action sequence without online task planning. Required perception and action services depend on the platform.
 
 .. _planner-direct-actions:
 
@@ -159,7 +155,7 @@ The ``codex`` Planner
 ``--planner codex`` uses the OpenAI Codex Python SDK. For each run,
 RPent starts a local Streamable HTTP MCP server on a background thread
 in the current process, and Codex calls the same toolkit through that
-server. You do not need to start ``scripts/codex_proxy/`` first.
+server.
 
 RPent excludes repository ``AGENTS.md`` instructions and development skills
 in ``.agents/skills/`` from the Codex planner's automatic context loading.
@@ -351,6 +347,12 @@ budget, while ``turns_used`` keeps accumulating. See
 
 ``flash`` replays a plan without an LLM loop, so this budget does not apply;
 it reports ``turns_used=0``.
+
+``--reasoning-effort`` defaults to ``high`` for API and ``none`` for Claude
+Code/Codex. In the historical LIBERO-PRO Long evaluation, disabling reasoning
+reduced average runtime from approximately 13.2 to 7.9 minutes (about 40%).
+This measurement applies to that evaluation configuration; compare current
+results in :doc:`../leaderboard/time-token-costs`.
 
 Other limits have different scopes:
 

@@ -138,7 +138,11 @@ class LiberoPrimitives:
         if self._flywheel_config is not None:
             from robots.libero.flywheel import create_episode_writer
 
-            self._flywheel = create_episode_writer(self._flywheel_config, obs)
+            config = dict(self._flywheel_config)
+            if config.get("collection_version") == "aligned-batches-v1":
+                # One cached contract lookup, never an auxiliary state RPC per control step.
+                config["native_action_spec"] = self.env.action_specs
+            self._flywheel = create_episode_writer(config, obs)
         return self._last_obs, info
 
     def begin_primitive(self, name: str) -> None:
@@ -156,6 +160,8 @@ class LiberoPrimitives:
     def _step_env(self, action) -> None:
         """Execute one env action between cancellation checkpoints."""
         self._check_cancelled()
+        if hasattr(self._flywheel, "begin_dispatch"):
+            self._flywheel.begin_dispatch(action, source=self._active_primitive)
         if self.runtime_journal is None:
             result = self.env.step(action)
         else:
@@ -180,8 +186,14 @@ class LiberoPrimitives:
                 callback_with_send_sequence=True,
             )
         obs, reward, terminated, truncated, _info = result
+        if self.runtime_journal is not None and self.env.terminated:
+            self.runtime_journal.close_planner_admission(
+                source_sequence=self.runtime_journal.sequence - 1
+            )
         if self._flywheel is not None:
             self._flywheel.add_transition(action, obs, reward, terminated, truncated)
+            if hasattr(self._flywheel, "end_dispatch"):
+                self._flywheel.end_dispatch()
         self.set_obs(obs)
         if self._recording:
             self.record_frame(obs)
@@ -223,6 +235,13 @@ class LiberoPrimitives:
                 source=self.policy_kind,
                 instruction=instruction,
                 segment_sequence=segment_sequence,
+            )
+        if hasattr(self._flywheel, "record_input"):
+            self._flywheel.record_input(
+                policy_obs,
+                inference_sequence=inference_sequence,
+                segment_sequence=segment_sequence,
+                observation_sequence=getattr(self, "_observation_sequence", None),
             )
         started = time.monotonic()
         self._last_chunk_report = {
@@ -266,21 +285,37 @@ class LiberoPrimitives:
         if journal is not None and journal.chunk_steps is not None:
             actions = actions[: journal.chunk_steps]
 
-        def send_chunk(**kwargs):
+        def dispatch(send_sequence=None, **kwargs):
+            if hasattr(self._flywheel, "begin_dispatch"):
+                self._flywheel.begin_dispatch(
+                    actions,
+                    source=self.policy_kind,
+                    proposal_id=vla_id,
+                    proposal_sequence=proposal_sequence,
+                    inference_sequence=inference_sequence,
+                    segment_sequence=segment_sequence,
+                    client_send_sequence=send_sequence,
+                    proposal_length=proposal_length,
+                )
             if journal is None:
                 return self.env.chunk_step(actions, **kwargs)
+            return self.env.rsi_chunk_step(
+                actions,
+                evidence={
+                    **journal.identity(),
+                    "client_send_sequence": send_sequence,
+                    "proposal_sequence": proposal_sequence,
+                    "proposal_indices": list(range(len(actions))),
+                    "proposal_length": proposal_length,
+                },
+                **kwargs,
+            )
+
+        def send_chunk(**kwargs):
+            if journal is None:
+                return dispatch(**kwargs)
             return journal.action(
-                lambda send_sequence: self.env.rsi_chunk_step(
-                    actions,
-                    evidence={
-                        **journal.identity(),
-                        "client_send_sequence": send_sequence,
-                        "proposal_sequence": proposal_sequence,
-                        "proposal_indices": list(range(len(actions))),
-                        "proposal_length": proposal_length,
-                    },
-                    **kwargs,
-                ),
+                lambda send_sequence: dispatch(send_sequence, **kwargs),
                 actions,
                 source=self.policy_kind,
                 proposal_sequence=proposal_sequence,
@@ -301,6 +336,10 @@ class LiberoPrimitives:
                 self._last_chunk_report["unknown_steps"] = len(actions)
                 raise
             else:
+                if journal is not None and self.env.terminated:
+                    journal.close_planner_admission(
+                        source_sequence=journal.sequence - 1
+                    )
                 term = np.asarray(result[2])
                 self._last_chunk_report["executed_steps"] = (
                     len(term) if term.ndim else len(actions)
@@ -339,6 +378,8 @@ class LiberoPrimitives:
                         proposal_index=index,
                     )
             obs = chunk_obs[-1]
+            if hasattr(self._flywheel, "end_dispatch"):
+                self._flywheel.end_dispatch()
         self.set_obs(obs)
         return self._last_obs
 
@@ -477,11 +518,23 @@ class LiberoPrimitives:
             else reason,
             "runtime_budget": journal.budget_snapshot() if journal else None,
         }
+        if (
+            reason == "chunk_allowance"
+            and journal is not None
+            and getattr(journal, "planner_segment_handoff_hint", False)
+        ):
+            data["handoff_hint"] = (
+                "Use the returned observations and native status to identify what is still unfinished "
+                "before choosing the next subgoal instruction, allowance, recovery or stop. "
+                "Separate observed facts from uncertain state; allowance end alone proves no grasp or stage outcome."
+            )
         if error is not None:
             data["diagnostic"] = error
         if error is not None and reason != "budget":
             data["error"] = error
             data["interrupted"] = reason == "cancelled"
+        if hasattr(self._flywheel, "flush"):
+            self._flywheel.flush()
         if journal is not None:
             journal.emit("vla_segment_end", **data)
         return ToolResult(data=data)

@@ -39,12 +39,7 @@ These options control the planner, memory, output directory, and Dashboard.
      - ``api`` only: token limit per model response.
    * - ``--reasoning-effort``
      - ``api``: ``high``; ``claude_code``/``codex``: ``none``
-     - Reasoning effort for ``api``, ``claude_code``, and ``codex``:
-       ``none``, ``low``, ``medium``, ``high``, or ``xhigh``. Disabling
-       reasoning reduced the average runtime from approximately 13.2 to
-       7.9 minutes (about 40%) in our LIBERO Pro Long evaluations.
-       Higher effort may improve task success rate. Supported levels
-       ultimately depend on the selected model.
+     - ``none``, ``low``, ``medium``, ``high``, or ``xhigh``; support depends on the model. See :doc:`../leaderboard/time-token-costs` for measured runtime and token costs.
    * - ``--planner-timeout-s``
      - ``—``
      - Defaults to ``CODEX_TIMEOUT_S`` (Codex only), then ``CELL_TIMEOUT_S``, then 1200 seconds; terminal interactive API/Claude sessions are exempt.
@@ -94,7 +89,7 @@ These options control the planner, memory, output directory, and Dashboard.
 Environment Options
 -------------------
 
-LIBERO selects tasks with ``--suite``, ``--task``, ``--seed``, and ``--libero-type``; the variant defaults to ``LIBERO_TYPE`` or ``pro``. RoboCasa365 and RoboTwin use ``--task-name``. Franka uses ``--task-id`` and ``--robot-config``. See :doc:`../simulators/libero`, :doc:`../simulators/robocasa`, :doc:`../simulators/robotwin`, :doc:`../real_world_robots/franka`, and :doc:`../real_world_robots/dual_franka` for details.
+LIBERO selects tasks with ``--suite``, ``--task``, ``--seed``, and ``--libero-type``. The variant comes from ``--libero-type``, then ``LIBERO_TYPE``, then the suite: base suites select ``standard`` and perturbation suites select ``pro``. Perturbation suites require ``pro``. RoboCasa365 and RoboTwin use ``--task-name``. Franka uses ``--task-id`` and ``--robot-config``. See :doc:`../simulators/libero`, :doc:`../simulators/robocasa`, :doc:`../simulators/robotwin`, :doc:`../real_world_robots/franka`, and :doc:`../real_world_robots/dual_franka` for details.
 
 ``--env-endpoint``, ``--am-endpoint``, and LIBERO’s ``--sam3-endpoint`` connect to existing environment, action-model (VLA or WAM), and SAM3 services respectively. RPent RPC addresses use ``[protocol://]host:port``, defaulting to ``http``. LingBot uses native WebSocket; see :doc:`../simulators/robotwin`. See :doc:`advanced_deployment` for GPU assignment and remote services.
 
@@ -125,6 +120,9 @@ dual-Franka. Franka and YAM connect to externally deployed VLA services;
 select their GPU when deploying the service.
 LIBERO, RoboTwin, RoboCasa and RoboDojo use ``--env-cuda-device`` for the environment.
 LIBERO, RoboDojo and dual-Franka use ``--sam3-cuda-device`` for local SAM3.
+Choose compatible GPUs according to current memory availability and load when
+starting local services. Device numbers in the examples are illustrative and
+can be replaced; they do not constrain GPU selection for later runs.
 These services may share a GPU when memory permits. External endpoints
 use the GPU configuration set when their services were started.
 The original ``--cuda-device`` option remains a shared default for local services.
@@ -240,6 +238,8 @@ The table uses LIBERO as an example. Files depend on the environment, recording,
      - Purpose
    * - ``transcript_*.json``
      - Planner conversation, tool calls, and completion information.
+   * - ``result.json``
+     - Native episode outcome, planner finish state, and runtime errors; see :doc:`../simulators/libero` for field meanings.
    * - ``episode.mp4``
      - Episode video.
    * - ``run.log``

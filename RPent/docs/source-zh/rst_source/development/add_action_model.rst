@@ -83,7 +83,7 @@ VLA 启动函数也使用 ``AMConfig.spawn_worker()``。平台保留各自的服
 
 由于模型运行在独立进程中，添加基于模型的原语还需要以下组件：
 
-1. **编写 ``vla_server.py``。** 该进程只持有模型权重和 CUDA 上下文。继承 :class:`rpent.robots.components.am_facade_base.BaseVLAFacade`，实现 ``predict``，并通过扩展 ``_register_rpc`` 注册其他模型 RPC：
+1. 编写 ``vla_server.py``。 该进程只持有模型权重和 CUDA 上下文。继承 :class:`rpent.robots.components.am_facade_base.BaseVLAFacade`，实现 ``predict``，并通过扩展 ``_register_rpc`` 注册其他模型 RPC：
 
    - 默认传输方式为 **HTTP**，通过 ``POST /call`` 传输 JSON，适合
      LIBERO/Pi0.5 使用的扁平 ``image + state`` 数据。
@@ -105,7 +105,7 @@ VLA 启动函数也使用 ``AMConfig.spawn_worker()``。平台保留各自的服
       @tool
       def mymodel_pick(self, target: str) -> ToolResult:
           """使用模型抓取指定目标。"""
-          env_obs = self._env.get_obs()
+          env_obs = dict(self._env.raw_obs())
           env_obs["task_descriptions"] = f"pick {target}"
           chunk = self._model.predict(env_obs)
           self._env.chunk_step(chunk)
@@ -113,7 +113,7 @@ VLA 启动函数也使用 ``AMConfig.spawn_worker()``。平台保留各自的服
 
 4. **在 toolkit 中注册声明的工具。** 具体做法与脚本化原语相同。
 
-5. **在 ``robot_spec.py`` 中连接各组件。** 机器人的 ``get_toolkit`` 使用 ``runtime_kwargs`` 构造 toolkit：
+5. 在 ``robot_spec.py`` 中连接各组件。 机器人的 ``get_toolkit`` 使用 ``runtime_kwargs`` 构造 toolkit：
 
    .. code-block:: python
 

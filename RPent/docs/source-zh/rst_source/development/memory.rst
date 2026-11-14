@@ -20,7 +20,7 @@ RPent 通过 ``MemoryManager`` 管理每个机器人的经验文件、读取权�
    │   └── <task_key>.md
    └── _internal/inbox/<cell>/
 
-默认本地目录为 ``memory/<robot>/``。Hugging Face 中 LIBERO 按模型版本分目录，详见 :doc:`../guides/memory`；其他机器人仍使用 ``<robot>/``。自定义 ``--memory-dir`` 可指向任意采用上述结构的目录。
+默认本地目录为 ``memory/<robot>/``。LIBERO 和 RoboCasa 的公开语料按模型分子目录，RoboTwin 也支持显式选择语料子目录。选择规则见 :doc:`../guides/memory` 和各仿真环境页。``--memory-dir`` 指定采用上述结构的本地根目录。
 
 各机器人按需提供实际使用的记忆层：
 
@@ -59,7 +59,7 @@ RoboCasa 评测同时使用 task-specific 与 global memory。当前 ``target50.
 
 探索会保留各次尝试的状态和工具调用记录，并生成注明来源的经验草稿。运行器根据环境结果决定任务是否成功，再调用 ``MemoryManager.merge_memory`` 合并草稿、更新索引；成功任务的运行记录（audit）和动作序列有单独的发布条件。
 
-仿真环境默认自动合并，可用 ``--no-auto-merge-memory`` 保留草稿供人工检查。双臂 Franka 默认不自动合并，并通过人工评价确认成功。人工运行 ``rpent-memory merge`` 时，``--solved`` 是调用方提供的成功标记，只有核实环境或操作员结果后才能使用。
+探索默认自动合并记忆，可用 ``--no-auto-merge-memory`` 保留草稿供人工检查。双臂 Franka 和 YAM 依赖操作员判定结果、恢复场景。成功任务记录需要确认成功，失败尝试中有效的通用经验也可合并。人工运行 ``rpent-memory merge`` 时，只有核实环境或操作员结果后才能设置 ``--solved``。
 
 ``rpent-memory validate`` 检查记忆文件结构，不能验证任务是否真实成功。工具权限和合并实现见 ``rpent/memory/manager.py``，运行模式与结果处理见各机器人的 ``robot_spec.py`` 和 ``rpent/cli/main.py``。
 

@@ -101,3 +101,24 @@ Pi0.5 LIBERO SFT configuration at
 Match the configuration's resource placement and batch size to your available
 GPUs, and use the checkpoint and normalization settings for the selected model
 and dataset.
+
+Supervised bounded runs
+-----------------------
+
+A launcher may explicitly bind ``aligned-batches-v1`` collection in
+``RSI_RUNTIME_CONTEXT.collection``. Its ``--flywheel-root`` must match that
+context and stay inside the supervised job output. This mode writes batches of
+at most 25 returned transitions, separate exact policy inputs and proposals,
+and an alignment journal. ``collection.json`` records committed batches,
+pending sends and the last observed tail. A force kill can lose the uncommitted
+tail or an in-flight transfer; partial episodes remain available for diagnosis.
+The policy images retain their native policy orientation, rather than the
+calibrated planner image orientation. Nominal 20 Hz does not measure wall time.
+
+These schema-2 episodes are autonomous execution, with training admission
+``not_admitted``. Task success alone does not make actions expert supervision.
+For format inspection, ``export-lerobot --purpose diagnostic`` exports all
+returned steps, including failed episodes, into LeRobot while preserving this
+admission status and source references in ``meta/rpent_flywheel.json``.
+The default demonstration export rejects autonomous schema-2 data. Training
+requires a separate, traceable demonstration manifest and its admission checks.

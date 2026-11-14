@@ -31,21 +31,17 @@
    * - ``prompts``
      - ``PromptBundle``：``system`` 与 ``user`` 两套 prompt 工厂（见
        ``robots/<robot>/prompt_bundle.py``）。
-   * - ``dashboard``
-     - 可选的 Dashboard 描述。设为 ``None`` 时，该机器人不支持 Dashboard 控制；
-       否则由该配置定义任务命令与字段、运行组件和图像通道。
+   * - ``resolve_dashboard``
+     - 可选回调，根据已解析参数返回 ``DashboardSpec``，定义任务字段、运行组件和原语控件；设为 ``None`` 时不支持 Dashboard。相机页签从记录的 PNG 观测生成。
    * - ``add_cli_args``
      - 注册本机器人的 CLI 参数（如 ``--suite``、``--env-endpoint``）。
    * - ``parse_config``
-     - 校验参数并返回 ``RunConfig``；``recipe_tag``、``output_dir``、``prompt_vars``
-       三项需由你正确填写（供 prompt 模板插值）。
+     - 校验参数并返回 ``RunConfig``，填写 ``recipe_tag``、``output_dir``、``prompt_vars`` 和 ``task_desc``。
    * - ``init_runtime``
      - 启动或连接全部 runtime components，或只处理指定名称的子集，并构造对应的
        ``runtime_kwargs``。普通 CLI 传 ``None``；Dashboard 从 spec 得到显式声明的 shared 和 unique 子集后分别传入。``DashboardEventSink`` 用于上报运行时状态。
 
-``get_toolkit`` 一般只需把 ``runtime_kwargs`` 传给机器人子类； ``dashboard_events`` 和 ``config`` 由当前 runner 传入。启用记忆时，需要构造一个
-:class:`~rpent.memory.MemoryManager`（root 取自
-``config.prompt_vars["memory_dir"]``，未设置时回退到 ``get_memory_dir(robot_name)``）并传给 toolkit。Memory 访问权限在 ``MemoryManager`` 上配置。如果某个机器人还需要额外参数，可以继续声明 keyword-only 参数；例如 LIBERO 还使用 ``mode``、``attempts_per_session`` 和 ``state_output_dir``。
+``get_toolkit`` 将 ``runtime_kwargs`` 传给机器人子类，``dashboard_events`` 和 ``config`` 由运行器传入。必须构造 :class:`~rpent.memory.MemoryManager` 并传给工具集，root 取自 ``config.prompt_vars["memory_dir"]``，未设置时回退到 ``get_memory_dir(robot_name)``。访问权限在管理器上配置。如果某个机器人还需要额外参数，可以继续声明 keyword-only 参数；例如 LIBERO 还使用 ``mode``、``attempts_per_session`` 和 ``state_output_dir``。
 
 参考实现：``robots/libero/robot_spec.py``。
 
@@ -81,7 +77,7 @@ Planner
 
 用 ``@tool`` 声明函数或方法，参数类型注解和 Google 风格 docstring 提供 schema 与说明；``@tool(readonly=True)`` 允许只读工具并行执行，并跳过动作后的状态采集。处理函数返回 ``ToolResult(data=..., images=...)``：``data`` 保存 JSON 数据，按需包含 ``error`` 或 ``_finish``；``images`` 保存 PNG 字节。
 
-必须传入 ``MemoryManager``，基类始终注册公共文件工具和 ``finish``。子类 ``super().__init__()`` 后追加本机器人工具即可。逐步状态与 ``view_env_state`` 见 :doc:`add_primitive`。
+必须向 ``super().__init__(...)`` 传入 ``MemoryManager``；基类注册记忆文件工具和 ``finish``，子类再追加本机器人工具。逐步状态与 ``view_env_state`` 见 :doc:`add_primitive`。
 
 未设置 ``readonly=True`` 的工具按进入调度队列的顺序独占执行。等待中的独占调用优先于新的只读调用，独占范围包括观测采集和 Dashboard 发布。只读工具如果会更新共享缓存，应自行同步这些更新。``EnvState.save`` 会串行保存附件。
 

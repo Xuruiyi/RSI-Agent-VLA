@@ -12,6 +12,7 @@ from .evaluation import EvaluationStore, load_protocol
 from .adapters.rpent import closed_native_failure
 from .critical_progress import inspect_progress
 from .adapters.runtime_acceptance import inspect_attempt
+from .storage import atomic_json, identifier
 
 
 def read_json(path):
@@ -30,7 +31,7 @@ def native_flag(value):
 
 
 def evaluate_matrix(protocol, profile, manifest, *, result_id, bundle_id,
-                    candidate_id=None, role='release'):
+                    candidate_id=None, role='release', audit_output_root=None):
     if role not in ('development', 'release'):
         raise ValueError('sealed evidence is not accepted by this candidate feedback consumer')
     split = protocol['task_sets'][role]
@@ -91,20 +92,45 @@ def evaluate_matrix(protocol, profile, manifest, *, result_id, bundle_id,
         if result.get('error') or result.get('validity') == 'technical_invalid':
             row['validity'] = 'invalid'
         run_root=Path(entry['result_path']).parent
+        if profile.get('collection', {}).get('enabled'):
+            collection_path = run_root / 'dataset_manifest.json'
+            refs.append(str(collection_path))
+            try:
+                collection = read_json(collection_path)
+                complete = collection.get('identity') == identity and collection.get('alignment_complete') is True
+                if complete:
+                    from rpent.flywheel.episode import validate_episode
+                    from robots.libero.flywheel import LIBERO_SPEC
+                    for episode in collection['episodes']:
+                        validate_episode(episode['path'],spec=LIBERO_SPEC)
+            except (OSError, ValueError, KeyError):
+                complete = False
+            if not complete and profile['collection'].get('required_for_release', True):
+                all_l0 = False
+                notes.append(f'{task_key}/{seed}: required collection evidence incomplete; native facts retained')
         progress = inspect_progress(run_root, identity)
         progress_reports.append(progress)
         refs.extend(progress['evidence_refs'])
         if (run_root/'runtime_context.json').exists():
             audited=inspect_attempt(run_root,require_vla=False,result_path=result_path)
             runtime_reports.append(audited)
-            if audited['checks'].get('execution_health') is False:
+            requests = audited['costs'].get('model_requests')
+            row['model_requests'] = requests if type(requests) in (int, float) else None
+            if audited['checks'].get('execution_health') is False or audited['checks'].get('launcher_wrapper_completion') is False:
                 row['validity'] = 'invalid'
                 row['outcome'] = 'unknown'
             all_l0 &= audited['passed']
             all_costs &= audited['checks'].get('complete_usage') is True and audited['checks'].get('wall_gpu_storage_budget') is True
             for key,value in audited['costs'].items():
                 if type(value) in (int,float):costs[key]=costs.get(key,0)+value
-            refs.append(str(run_root/'independent-audit.json'))
+            if audit_output_root is not None:
+                audit_ref = (Path(audit_output_root) / identifier(entry['run_id']) / 'independent-audit.json').resolve()
+                if audit_ref.exists():
+                    if read_json(audit_ref) != audited:
+                        raise ValueError('conflicting independent audit: ' + str(audit_ref))
+                else:
+                    atomic_json(audit_ref, audited)
+                refs.append(str(audit_ref))
             notes.extend(audited['notes'])
             continue
         try:
@@ -167,23 +193,34 @@ def evaluate_matrix(protocol, profile, manifest, *, result_id, bundle_id,
         constraints['critical_progress'] = (False if False in values else True
             if len(values) == len(expected) and all(v is True for v in values) else None)
     actual_intervention={'information_scope':role, 'critical_progress_evidence': progress_reports}
-    if len(runtime_reports)==len(expected):
-        def verified(keys):
-            values=[r['checks'].get(key) for r in runtime_reports for key in keys]
-            return True if all(v is True for v in values) else False if any(v is False for v in values) else None
-        constraints['compatibility']=verified(['identity','model_reference','vla_actual_loading_and_prediction'])
-        constraints['resource_limits']=verified(['tool_budget','request_budget','step_budget','wall_gpu_storage_budget','all_tools_use_counted_dispatcher'])
-        constraints['safety']=verified(['all_tools_use_counted_dispatcher','no_mid_attempt_reset','step_budget','clean_completion'])
-        old_keys=[key for key in split['task_keys'] if tasks[key]['group']=='old']
-        constraints['critical_old_preserved']=all(sum(r['outcome']=='success' and r['validity']=='valid'
-            for r in assignments if r['task_key']==key)>=1 for key in old_keys)
+    def verified(keys):
+        values = [report['checks'].get(key) for report in runtime_reports for key in keys]
+        complete = len(runtime_reports) == len(expected)
+        return True if complete and all(value is True for value in values) else None
+
+    # Failed technical checks are missing acceptance evidence. Only explicit
+    # observed boundary violations establish a false hard constraint.
+    violations = {key for report in runtime_reports
+                  for key in report.get('confirmed_violations', [])}
+    constraints['compatibility'] = verified(['identity', 'model_reference', 'vla_actual_loading_and_prediction'])
+    constraints['resource_limits'] = (verified(['tool_budget', 'request_budget', 'step_budget',
+        'wall_gpu_storage_budget', 'all_tools_use_counted_dispatcher']) if all_costs else None)
+    constraints['safety'] = verified(['all_tools_use_counted_dispatcher', 'no_mid_attempt_reset',
+        'step_budget', 'clean_completion'])
+    for key in violations.intersection(constraints):
+        constraints[key] = False
+    old_keys = [key for key in split['task_keys'] if tasks[key]['group'] == 'old']
+    old_rows = [row for row in assignments if row['task_key'] in old_keys]
+    if old_rows and all(row['outcome'] != 'unknown' and row['validity'] == 'valid' for row in old_rows):
+        constraints['critical_old_preserved'] = all(any(row['outcome'] == 'success'
+            for row in old_rows if row['task_key'] == key) for key in old_keys)
     if runtime_reports:
         for key in ('finish_requires_native_success','planner_finish_reserve_calls'):
             values={(r.get('effective_rules') or {}).get(key) for r in runtime_reports}
             if len(values)==1 and None not in values:actual_intervention[key]=values.pop()
         actual_intervention['runtime_rule_observation_scope']='executed_slots_only'
     if not all_costs:
-        notes.append('complete full-cost evidence unavailable; resource_limits remains unknown')
+        notes.append('complete full-cost evidence unavailable; no resource compliance established')
     notes.append('safety, compatibility, critical_progress and actual authorized resource limits require independent checks')
     outcome = 'unknown' if unknown else 'failure' if any(row['outcome'] == 'failure' for row in assignments) else 'success'
     return ExperimentResult(result_id, bundle_id, protocol['protocol_id'], split['benchmark_id'], role,
@@ -198,9 +235,11 @@ def main(argv=None):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--candidate')
     args = parser.parse_args(argv)
+    store = EvaluationStore(args.output)
     result = evaluate_matrix(load_protocol(args.protocol), read_json(args.profile), read_json(args.manifest),
-                             result_id=args.result, bundle_id=args.bundle, candidate_id=args.candidate)
-    EvaluationStore(args.output).save_result(result)
+                             result_id=args.result, bundle_id=args.bundle, candidate_id=args.candidate,
+                             audit_output_root=store.root / 'result_audits' / identifier(args.result))
+    store.save_result(result)
     print(json.dumps(dict(result_id=result.result_id, unknown_count=result.unknown_count,
                           invalid_count=result.invalid_count, assigned_count=result.assigned_count)))
 

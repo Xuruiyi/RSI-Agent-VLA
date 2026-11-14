@@ -1,0 +1,16 @@
+{
+  "domain": "libero_tabletop",
+  "allowed_goal_kinds": [],
+  "policy_ref": "04-section-1.17; proposed only, not approved",
+  "rule_operators": [
+    "planner_segment_handoff_hint"
+  ],
+  "handoff_scope_approved": false,
+  "historical_development_bundle_ids": [
+    "initial-medium-v9-resultfix"
+  ],
+  "historical_protocol_refs": {
+    "rsi-libero-pro-pilot-v9-bounded-vla-tools60": "/home/xzh/RSI-Agent-VLA/config/pilot_v9.json"
+  },
+  "status": "draft_not_effective"
+}

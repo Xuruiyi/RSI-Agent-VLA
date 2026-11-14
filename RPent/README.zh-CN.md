@@ -21,7 +21,7 @@
   <sub>RPent: 面向物理世界的智能体基础设施</sub>
 </h1>
 
-**RPent (Recursive Physical Agent)** 是一个用于构建具身智能体的开放框架，使智能体能够通过与物理世界的递归交互持续演化。RPent 并不预设单一基础模型，而是提供一个递归智能体框架，将感知、推理、记忆、执行与自我演化等异构智能统一到一个物理智能体中。通过持续交互、反思与适应，RPent 使物理智能体能够获得新的能力，并超越其初始设计不断演进。我们将 RPent 构建于**服务化**、**标准化**和**可组合**的设计原则之上，确保框架具备高度的可扩展性。
+**RPent (Recursive Physical Agent)** 是一个具身智能体开源框架，通过可复用服务连接规划器、感知、动作模型、程序化工具和任务记忆。智能体观察环境、选择工具、检查执行结果，并保存经验供后续运行复用。
 
 <div align="center">
   <img src="https://github.com/RLinf/misc/raw/main/pic/rpent_framework.png" alt="RPent framework"/>
@@ -38,12 +38,10 @@ Codex / GPT-6 Astra / low / reasoning 已完成全部八套 LIBERO-PRO，**Overa
 
 ## 适用用户
 
-RPent 面向以下四类用户：
-
-- **具身智能研究者**：希望在具身任务与基准上取得更高成功率，尤其是长程操作任务。RPent 基于记忆引导的智能体组合方案，能够显著提升任务成功率，超越单纯依赖冻结 VLA 的效果。
-- **在线学习 / 强化学习研究者**：致力于研究可自我演化的具身智能体。RPent 提供的递归交互、反思与记忆蒸馏闭环，可作为在物理世界中开展持续学习与强化学习研究的现成基础。
-- **机器人应用开发者**：希望将具身方案部署到真实机器人硬件上。RPent 的服务化、标准化架构以及可定制的智能体控制逻辑，能够提升真实场景下的任务成功率，并缩短从原型到生产部署的周期。
-- **具身智能体的最终用户**：即上一类开发者所服务的用户。只需安装 RPent 及相应的真实机器人扩展，即可开箱即用地运行预定义任务，无需具备机器学习专业知识。
+- **具身智能研究者**：比较规划器、动作模型与记忆在操作任务中的表现。
+- **在线学习与强化学习研究者**：采集交互数据，研究任务经验如何在运行间复用。
+- **机器人应用开发者**：接入机器人硬件，组合任务所需的工具和服务。
+- **机器人操作员**：完成平台安装、标定与运动检查后，运行已配置的任务。
 
 ## 最新动态
 
@@ -51,143 +49,73 @@ RPent 面向以下四类用户：
 - [2026/09] 🔥 新增交互式 RPent 排行榜，覆盖 LIBERO、LIBERO-PRO、RoboCasa365 与 RoboTwin，提供模型对比及套件汇总。查看 [排行榜](https://rpent.readthedocs.io/zh-cn/latest/rst_source/leaderboard/index.html)。
 - [2026/09] 🔥 RPent 支持 Franka 单臂与双臂真机扩展。文档：[Franka](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/franka.html) · [Dual Franka](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/dual_franka.html)。
 - [2026/08] 🔥 支持 RoboCasa，使用 RLDX-1 作为操作模型。参见 [RoboCasa 安装与 Target50 指南](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robocasa.html)。
-- [2026/08] 🔥 新增非推理（non-reasoning）模式，平均执行时间降低约 40%。
-- [2026/08] 🔥 支持 LIBERO 探索模式。文档：[LIBERO 探索模式](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html#memory)。
+- [2026/08] 🔥 新增非推理模式；历史 LIBERO-PRO Long 评测的平均运行时间降低约 40%。
+- [2026/08] 🔥 支持 LIBERO 探索模式。文档：[LIBERO 探索模式](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html#libero-exploration)。
 - [2026/08] 🔥 支持 RoboTwin，使用 LingBot-VLA 处理双臂操作任务。文档：[RoboTwin](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robotwin.html)。
 - [2026/07] 🔥 RPent 首篇论文 [Harness VLA: Steering Frozen VLAs into Reliable Manipulation Primitives via Memory-Guided Agents](https://arxiv.org/abs/2607.08448) 发布。
 
 ## 功能矩阵
 
-<table width="100%" style="width: 100%; table-layout: auto; border-collapse: collapse;">
-  <thead align="center" valign="bottom">
-    <tr>
-      <th style="min-width: 300px;">智能体规划器</th>
-      <th style="min-width: 340px;">动作原语</th>
-      <th style="min-width: 300px; text-align: left;">仿真环境</th>
-      <th style="min-width: 260px;">真实世界</th>
-    </tr>
-  </thead>
-  <tbody valign="top">
-    <tr>
-      <td>
-        <ul style="margin-left: 0; padding-left: 16px;">
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/configure_planner.html#claude-code-planner">Claude Code</a> ✅</li>
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/configure_planner.html#codex-planner">Codex</a> ✅</li>
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/development/add_planner.html">Custom Planner</a> ✅</li>
-        </ul>
-      </td>
-      <td>
-        <ul style="margin-left: 0; padding-left: 16px;">
-          <li><b>VLA</b></li>
-          <ul>
-            <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html">Pi0.5</a> ✅</li>
-            <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robocasa.html">RLDX-1</a> ✅</li>
-            <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robotwin.html">LingBot-VLA</a> ✅</li>
-          </ul>
-          <li><b>WAM</b></li>
-          <ul>
-            <li>DreamZero</li>
-            <li><a href="docs/source-zh/rst_source/development/add_action_model.rst">Cosmos Policy</a>（LIBERO / LIBERO-Pro）</li>
-            <li><a href="docs/source-zh/rst_source/development/add_action_model.rst">Fast-WAM</a>（LIBERO / LIBERO-Pro / RoboTwin）</li>
-          </ul>
-        </ul>
-      </td>
-      <td style="text-align: left; padding-left: 8px;">
-        <ul style="margin-left: 0; padding-left: 16px;">
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html">LIBERO-PRO</a> ✅</li>
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robocasa.html">RoboCasa</a> ✅</li>
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robotwin.html">RoboTwin</a> ✅</li>
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robodojo.html">RoboDojo</a> ✅</li>
-        </ul>
-      </td>
-      <td>
-        <ul style="margin-left: 0; padding-left: 16px;">
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/franka.html">Franka</a> ✅</li>
-          <li><a href="https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/dual_franka.html">Dual Franka</a> ✅</li>
-          <li>SO-101</li>
-          <li>YAM</li>
-        </ul>
-      </td>
-    </tr>
-  </tbody>
-</table>
+| 组件 | 已有集成 |
+| --- | --- |
+| [规划器](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/configure_planner.html) | 直接 API、Claude Code、Codex；支持[自定义规划器](https://rpent.readthedocs.io/zh-cn/latest/rst_source/development/add_planner.html) |
+| [动作模型](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/configure_primitives.html) | Pi0.5、RLDX-1、LingBot-VLA；Cosmos Policy / Cosmos3 支持 LIBERO 和 LIBERO-PRO；Fast-WAM 支持 LIBERO、LIBERO-PRO 和 RoboTwin |
+| 仿真环境 | [LIBERO / LIBERO-PRO / LIBERO-plus](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html)、[RoboCasa365](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robocasa.html)、[RoboTwin](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robotwin.html)、[RoboDojo](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robodojo.html) |
+| 真实机器人 | [Franka](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/franka.html)、[Dual Franka](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/dual_franka.html)、[YAM](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/yam.html) |
+| 计划重放 | [LIBERO Flash Mode](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/flash.html)、[Franka 任务卡](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/franka.html#franka-flash) |
+
+RoboDojo 使用程序化运动、夹爪工具与 SAM3。动作模型支持范围取决于平台和 checkpoint，兼容组合见[动作模型指南](https://rpent.readthedocs.io/zh-cn/latest/rst_source/development/add_action_model.html)。DreamZero 与 [SO-101](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/so101.html) 仍在规划中。
 
 ## 快速开始
 
-**1. 选择一个环境并安装 RPent。**
+以下示例在 Linux 和 NVIDIA GPU 上运行一个 LIBERO-PRO 任务。先准备 `uv`、兼容的 CUDA 驱动和 Anthropic API Key；完整前提与排障见[快速开始文档](https://rpent.readthedocs.io/zh-cn/latest/rst_source/get_started/quickstart.html)。其他平台使用独立环境，分别按 [RoboCasa365](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robocasa.html)、[RoboTwin](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robotwin.html)、[RoboDojo](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robodojo.html) 或[真机部署](https://rpent.readthedocs.io/zh-cn/latest/rst_source/real_world_robots/index.html)指南安装。
+
+**1. 在独立环境中安装 RPent。**
 
 ```bash
-git clone https://github.com/RLinf/RPent rpent && cd rpent
-# 默认推荐（LIBERO-PRO）：
-pip install -e ".[libero-pro]"
-
-# 其他环境配置：
-pip install -e ".[robocasa]"    # RoboCasa
-pip install -e ".[robotwin]"    # RoboTwin
-pip install -e ".[franka]"      # Franka / 双臂 Franka
+git clone https://github.com/RLinf/RPent.git
+cd RPent
+uv venv --python 3.11
+source .venv/bin/activate
+# 先安装兼容 CUDA 构建的 torch==2.7.1 和 torchvision==0.22.1。
+uv pip install -e ".[libero-pro]"
+uv pip install "huggingface_hub>=0.34,<1.0" modelscope
 ```
 
-`.[libero-pro]` 是默认推荐配置。其他环境见
-[安装文档](https://rpent.readthedocs.io/zh-cn/latest/rst_source/get_started/quickstart.html)。
+按 [PyTorch 安装说明](https://pytorch.org/get-started/previous-versions/)选择 CUDA 构建，并将 `pip install` 换成 `uv pip install`。
 
-RoboCasa 安装、任务 memory 与 Target50 协议参见
-[RoboCasa 指南](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/robocasa.html)。
-
-RoboCasa 同时使用
-[RPent-memory](https://huggingface.co/datasets/RLinf/RPent-memory/tree/main/robocasa)
-中 `robocasa/task-specific/` 下的当前任务文件和 `robocasa/global/GLOBAL_MEMORY.md`。
-CLI 与 Dashboard 均提供这两层记忆供规划器按需读取，不要求动作前完整读取全部文件。
-HF memory 跟随当前分支，不锁定数据版本。
-
-下面的示例继续使用 LIBERO-PRO。
-
-**2. 下载 LIBERO-PRO 仿真资产。**
+**2. 下载仿真资源与模型权重。**
 
 ```bash
 liberopro-download-assets --skip-existing
-```
-
-> 💡 访问 Hugging Face 较慢时，可走镜像加速：`HF_ENDPOINT=https://hf-mirror.com liberopro-download-assets --skip-existing`。
-
-其他仿真器见[安装文档](https://rpent.readthedocs.io/zh-cn/latest/rst_source/get_started/quickstart.html)。
-
-**3. 配置密钥与 checkpoint，然后运行。**
-
-```bash
-# Anthropic 密钥；使用官方端点时无需 export base url。
-export ANTHROPIC_API_KEY=sk-xxx
-
-# VLA checkpoint —— 从以下地址下载：
-# https://huggingface.co/RLinf/RLinf-Pi05-LIBERO-130-fullshot-SFT
 hf download RLinf/RLinf-Pi05-LIBERO-130-fullshot-SFT \
   --exclude optimizer.pt \
   --local-dir ./checkpoints/RLinf-Pi05-LIBERO-130-fullshot-SFT
+modelscope download --model facebook/sam3 sam3.pt \
+  --local_dir ./checkpoints/sam3
 
-export PI05_CHECKPOINT_PATH=$PWD/checkpoints/RLinf-Pi05-LIBERO-130-fullshot-SFT
-
-# SAM 3.0 checkpoint —— 从以下地址下载：
-# https://modelscope.cn/models/facebook/sam3
-pip install -U modelscope
-
-modelscope download facebook/sam3 \
-  --local-dir ./checkpoints/sam3
-
-export SAM3_CHECKPOINT_PATH=$PWD/checkpoints/sam3/sam3.pt
-export LIBERO_TYPE=pro
-
-# 运行一个任务：libero_object_swap，task 2，seed 0，使用 Claude Code
-# 和 Claude Opus 4.8。
-rpent --robot libero --suite libero_object_swap --task 2 --seed 0 \
-  --env-cuda-device 0 --am-cuda-device 0 --sam3-cuda-device 0 \
-  --planner claude_code --model claude-opus-4-8
+export PI05_CHECKPOINT_PATH="$PWD/checkpoints/RLinf-Pi05-LIBERO-130-fullshot-SFT"
+export SAM3_CHECKPOINT_PATH="$PWD/checkpoints/sam3/sam3.pt"
 ```
 
-其他规划器（`api`、`codex`）与模型提供商的配置见[规划器文档](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/configure_planner.html)。
-探索模式与本地 memory 评测详见 [LIBERO 文档](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html)。
+访问 Hugging Face 较慢时，可在相应下载命令前加 `HF_ENDPOINT=https://hf-mirror.com`。
+
+**3. 检查规划器连接并运行任务。**
+
+```bash
+export ANTHROPIC_API_KEY="YOUR_API_KEY"
+rpent-check-llm --planner claude_code --model claude-opus-4-8
+rpent --robot libero --libero-type pro \
+  --suite libero_object_swap --task 2 --seed 0 \
+  --planner claude_code --model claude-opus-4-8 \
+  --output-dir ./logs/first-libero-pro
+```
+
+运行结束后，在输出目录查看 `result.json`、`episode.mp4`、`transcript_*.json` 和 `run.log`。LIBERO 以环境原生信号判定成功，[结果字段说明](https://rpent.readthedocs.io/zh-cn/latest/rst_source/simulators/libero.html#libero-results)给出了具体含义。GPU 选择见 [CLI 设备参数](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/cli.html)，其他规划器配置见[规划器指南](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/configure_planner.html)，任务经验的生成与复用见[记忆与探索指南](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/memory.html)。
 
 ### 交互模式
 
-使用 `claude_code` 或 `codex` 时，加上 `--tui`（`-t`）即可在终端里实时引导智能体。内置任务会预填在 `you>` 提示符处。直接按 Enter 即可提交该任务；如需修改或替换任务，请先编辑输入内容，再按 Enter 提交。任务运行期间，可以继续输入消息引导智能体（`/help` 查看命令，`/quit` 或 Ctrl-D 结束）。需要真实终端（TTY）。`api` planner 使用原生 CLI，先运行预设任务，再在每轮运行完成后接收输入，使用 `/exit` 退出。
+在任务命令中加 `--tui`（`-t`），即可在终端输入指令。Claude Code 和 Codex 在执行期间接收消息，API 规划器在回复后接收后续输入。SDK 控制命令用 `/help` 查看，退出用 `/exit`。详见[交互使用](https://rpent.readthedocs.io/zh-cn/latest/rst_source/guides/dashboard.html#terminal-interaction)。
 
 ```bash
 rpent --robot libero --suite libero_object_swap --task 2 --seed 0 \

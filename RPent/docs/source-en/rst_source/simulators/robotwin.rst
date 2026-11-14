@@ -227,7 +227,8 @@ height). Pass ``--task-config demo_clean`` for a simple, clean scene.
 - ``--robotwin-assets-path`` overrides ``ROBOTWIN_ASSETS_PATH``.
 - ``--am-checkpoint`` overrides ``LINGBOT_MODEL_PATH``.
 - ``--env-cuda-device 0 --am-cuda-device 1`` assigns GPU 0 to the local
-  simulator and GPU 1 to the local action model. For GPU defaults and overrides,
+  simulator and GPU 1 to the local action model as an example. Choose device IDs
+  according to available resources. For GPU defaults and overrides,
   see :doc:`../guides/cli`.
 
 For planner setup, external service endpoints, and offline resources, see

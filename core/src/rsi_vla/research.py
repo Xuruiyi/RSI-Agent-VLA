@@ -49,6 +49,20 @@ class ResearchJob:
         self._save()
         return self.state["status"]
 
+    def record_storage(self, byte_count, reason):
+        """Record evidence produced by an admitted action, even after its request cap closes.
+
+        This does not reopen a job or admit an action. Storage remains an actual
+        measured cost, and an overshoot keeps the job exhausted.
+        """
+        if type(byte_count) is not int or byte_count < 0 or 'artifact_bytes' not in self.state['limits']:
+            raise ValueError('registered nonnegative storage measurement required')
+        self.state['charges'].append({'reason':reason,'costs':{'artifact_bytes':byte_count}})
+        self.state['used']['artifact_bytes'] += byte_count
+        if self.state['used']['artifact_bytes'] >= self.state['limits']['artifact_bytes']:
+            self.state['status']='budget_exhausted'
+        self._save()
+
     def run(self, function, *, cost, reason):
         """Charge a bounded action before invocation; never start after exhaustion.
 
