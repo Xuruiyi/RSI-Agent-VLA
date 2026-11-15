@@ -1,6 +1,6 @@
-# RSI-VLA 离线研究 core
+# RSI-VLA 研究 core
 
-`core/` 是聚合目录维护的自研代码，采用 Python 标准库，要求 Python ≥3.10，无需安装包。入口使用 `PYTHONPATH=core/src`。completion11 已正常升级并闭合真实继承（binding/技术有效、native failure）；relations12 三ρ具有真实反馈、程序学习与实际消费，独立比较accept，但旧能力绝对发布门槛未满足。获批第三候选阶段现按用户指令暂停，尚无新Research或第三候选。当前状态与接续入口见项目文档04 §1.17和 OFFLINE_CHECKS.md §32。
+`core/` 是聚合目录维护的研究与执行协调代码，要求 Python ≥3.10。基础合约、存储与离线状态转换使用标准库，入口为 `PYTHONPATH=core/src`；实际 Runtime、Research SDK 和原生数据 batch 使用各自匹配的安装依赖。实现入口见下文，运行状态、历史暂停与接续边界统一见[项目文档04 §1.17](../项目文档/04_实施路线与待决事项.md#117-5a-数据经验有限往返与资格准备2026-11-13)，检查证据见 [OFFLINE_CHECKS.md](OFFLINE_CHECKS.md)。
 
 在聚合目录执行：
 
@@ -34,6 +34,12 @@ v9 profile 的聚合源码标识为 `aggregate-core-v0.5.0-bounded-vla`；包元
 | `research.py` | 作业绑定起点，分项成本、预算终止、恢复不重置 |
 | `evaluation.py` | 固定协议、独立发布结果、全指派矩阵重算、三态 Gate |
 | `release.py` | 受信写入端，安全点激活、重读有效版、返回曾激活版本 |
+| `runtime.py` / RPent `execution_arms.py` | 冻结 D/S/R 执行程序或绑定动态 A，沿既有 Toolkit/VLA 与结果链运行 |
+| `research_transport.py` / `bounded_runner.py` | 保存业务请求、生成实际 SDK 输入并消费有界 Research 回执 |
+| `relation_learning.py` / `relation_consumption.py` | 关系反馈、有限探索及实际消费者的独立核验 |
+| `task_continuation.py` / `task_completion.py` | 从角色回执选择预登记后继，复用 Coordinator 与角色隔离 |
+| `adapters/pi05_training.py` / `theta_b.py` | 原生 CPU 数据准备、训练交接与冻结 θ×B 评价计划 |
+| `effective_psi.py` | 冻结实际研究程序、提示、ρC 与检索规则，事实记忆单独保存 |
 
 `TaskState.update` 只接受已入账且同回合事件、合法观察/独立判据和完成规则引用。调用者负责执行该具体判据；工具结束或启发式标签本身不能作为完成提交。当前关系失效或未知不会删除原事件及提交历史。未知状态由 `ResearchJob.unknown_action` 按既有观察/恢复权限和剩余额度返回 `observe`、`recover` 或 `stop`。
 
@@ -58,7 +64,7 @@ consumer 要求完整且不重复的预定 task/seed 集合，从每个槽的原
 
 `ResearchJob.run` 只封装已知成本的同步有界离线动作，提前登记成本、额度不足不调度，耗尽后停止后续动作。它不抢占外部进程，也不负责 GPU/LLM/训练的实时监督；实际后端必须先实现对应资源的进程内监督和授权。生成数据放 `--artifacts` 指定的外部目录，不写入代码树。
 
-测试覆盖的证据层级是离线状态转换。真实 VLA 基线、动作全覆盖、实际候选修复/训练、三类关系学习、仿真部署和 H1—H4 仍需各自运行证据。
+离线检查验证状态转换与接口；实际 VLA、Research、训练、部署和 H1—H4 分别消费各自运行证据。具体批次的已验证范围和缺口见[项目文档04](../项目文档/04_实施路线与待决事项.md)。
 
 历史 v9 静态开发计划使用 `run_profile_v9_resultfix.json / pilot_v9.json`，当时 Planner 和 Research LLM 固定 `gpt-6.1-sol / medium`；新 Research 请求使用 `gpt-6.1-sol / high`，Planner 保持 medium。v1 和历史 low 证据保持原样。下面只生成计划，不调用模型或启动服务：
 
@@ -183,7 +189,7 @@ PYTHONDONTWRITEBYTECODE=1 RPent/.venv/bin/python scripts/run_protocol10.py advan
 
 Autoloop 使用本地源码和局部 Node24，通过既有 command adapter 调用 `scripts/run_protocol10_autoloop.py`。服务只监听127.0.0.1，独占 home、scratch 和 ingress/requests；responses、阶段账、active 和源码只读，私有 `/dev` 没有 GPU。独立 host 消费固定 RPC，再调用现有 core CLI 与隔离角色。外部事件只给登记身份和核验引用，文字不决定命令、目录、权限、预算、模型或发布对象；重复事件与 trigger 幂等，内容冲突拒绝。
 
-当前专用实例的准备与启停命令保存在 `artifacts/continuation-20261113-protocol10/batch3/verification/A/production-templates/START.md`。初始化使用 `init --no-service`，`prepare.py` 关闭全部通知；本轮已初始化，重启直接使用同目录脚本：
+历史 protocol10 专用实例的准备与启停命令保存在 `artifacts/continuation-20261113-protocol10/batch3/verification/A/production-templates/START.md`。以下命令保留其原部署入口；实际启停须符合该实例的当前授权及停止状态。新任务由宿主物化自己的配置和 permit，不复制历史 permit 启动：
 
 ```bash
 bash artifacts/continuation-20261113-protocol10/batch3/verification/A/production-templates/start-host.sh &
@@ -222,7 +228,8 @@ wait "$host_pid"
 - `research_per_request`：可登记每请求 `wall_seconds/storage_bytes` 上限。真实 transport 仍是一请求一身份一 permit；多轮研究在原 job 总额内使用不同请求及适用 permit，不自动重试旧请求。未登记时保留 300 秒/10 MiB 的既有单请求提案，protocol10 保留自己的更窄额度。
 - `gpu_admission`：登记 `required_memory_mib/safety_margin_mib/minimum_compute_capability`，可用 `compatible_names` 收窄硬件兼容性。`select_gpu` 及 `run_release_comparison.gpu_admission(policy=...)` 按新鲜空闲显存、兼容性和负载选择；旧调用仍保留 12288 MiB 政策。
 - `resource_wait`：登记 `max_wait_seconds/check_interval_seconds`。等待耗尽返回 `waiting_resources` 检查点和累计等待状态，不关闭任务。恢复需要资源、仍适用的授权及非人工暂停/取消状态；等待计量由调用方记回原离线池。原 release08/protocol10 的等待额度保持原约定。
-- `evidence_input`：`mode: "selected_l0"`，显式填写 `reason` 与覆盖本次所有 result 的 `event_ids: {result_id: [event_id, ...]}`。输入记录来源、总事件数、选中事件及遗漏范围，原 EvidenceView 不变。`ResearchTools.read_development_events(result_id, event_ids=None)`（也可经 `ResearchToolkit.call` 调用） 默认返回事件索引，指定 event_ids 时只读合法开发结果绑定的原始事件，拒绝 release/sealed 和未知事件。当前 SDK 单次请求仍无工具；host 可补读并在剩余预算内准备另一请求，模型自主工具补读尚未接通。
+- `evidence_input`：`mode: "selected_l0"`，显式填写 `reason` 与覆盖本次所有 result 的 `event_ids: {result_id: [event_id, ...]}`。输入记录来源、总事件数、选中事件及遗漏范围，原 EvidenceView 不变。`ResearchTools.read_development_events(result_id, event_ids=None)` 默认返回事件索引；指定 event_ids 时只读合法开发结果绑定的原始事件，拒绝 release/sealed 和未知事件。新请求可通过下文 `evidence_requests` 由宿主消费补证，SDK 单次调用保持无工具。
+- `research_input`：`mode: "readable_v1"`，登记 `max_read_requests/max_events_per_read`，由 `readable_input` 将原始事实、选择、遗漏索引、缺失和媒体引用呈现为可读 JSON。未启用时保留既有 transport 语义。
 
 从聚合目录准备下一阶段：
 
@@ -234,7 +241,7 @@ RPent/.venv/bin/python scripts/prepare_task_stage.py \
 
 stage request 提供 `repository_root/artifacts/run_id/bundle_id/task_key/seed/split/output_dir/cuda_device/cleanup/reserve`。脚本调用真正的 `prepare_runtime`，从其 limits 派生下一回合向量（Planner timeout 包含在 wall 内），保留 Runtime blockers。可另传 `gpu_cards/waited_seconds/offline_remaining_seconds`，按政策选择设备或保存资源等待检查点。硬件快照只供准备；派发前仍由真实 host 核对新鲜资源、授权、预算和暂停状态。
 
-通用准备接口可在不同请求和阶段间复用；protocol10 协调器仍只执行其固定链。隔离并行、模型自主补读和新领域算子需要相应消费者与计量接线后启用，具体后续项见04 §5.4。
+通用准备接口可在不同请求和阶段间复用；新任务的结果驱动后继由下文 `TaskContinuationBackend` 消费，protocol10 保留固定链及历史终态。隔离并行和新领域算子按实际消费者与计量条件启用，具体后续项见04 §5.4。
 
 
 检查和交付按[04 §5.1](../项目文档/04_实施路线与待决事项.md#51-任务提示词编写参考)选择范围。新任务政策按需启用，普通修复无需先配置研究、评价和资源等待字段。准备入口与真实SDK写出的response schema按当前任务生成相同的解释数量要求，历史响应继续按其保存的请求消费。监督优化只减少消失进程组及清理循环中的冗余扫描，仍检查存活成员、原始硬期限和清理结果。
@@ -244,3 +251,65 @@ stage request 提供 `repository_root/artifacts/run_id/bundle_id/task_key/seed/s
 新任务可在显式领域政策和 `rsi-task-policy-v1` 下允许 `planner_task_hint`。真实Research提交的非空文本最长1200字符，由phi v5与其他既有规则共同保存；Runtime将其追加到Planner启动输入并在run_start记录实际文本。它不改变工具、动作chunk、资源上限或原生成功定义。缺省无hint时，两版启动输入与原实现逐字一致。旧protocol10不展示或接受这个新算子。
 
 实际新任务由受限角色消费者 `task_completion.py` 接通多请求、开发、Candidate及独立矩阵/Gate；具体预算和恢复仍由已登记scope、permit及host准入核验。升级继续经过独立 `upgrade_bridge`，开发或trial不等于正式Candidate、比较accept或发布。当前权威断点见04 §1.17；旧protocol10保持终止。
+
+
+## 新任务的实际执行与研究消费者
+
+本节说明接口与证据去向。各臂运行、Research、费用和清理的当前状态统一见[项目文档04](../项目文档/04_实施路线与待决事项.md#framework15近期框架优化实施中2026-11-15)。
+
+### D/S/R/A 整回合执行
+
+[execution_arms.py](../RPent/robots/libero/execution_arms.py) 的 `libero-execution-arm-v1` 规格由 `validate_execution_arm` 检查，`runtime.prepare_runtime` 将其冻结到 Runtime context。D/S/R 经现有 Flash robot hook 调用 `run_execution_arm`，直接沿 `Toolkit.execute_tool("vla_execute", ...)`、原生 VLA processor、动作 RPC、journal 和 finalizer 执行；A 继续使用 Codex Planner。这里的 Flash hook 消费冻结程序，不启动在线 Planner 或历史 Flash 计划。
+
+| 臂 | 实际消费者与信息 |
+| --- | --- |
+| D | 每个 chunk 使用原始任务指令和最新原生图像/状态；禁止阶段指令替换和ρB路由 |
+| S | 按冻结列表执行技能指令、参数、公开状态完成条件和阶段额度；顺序不在线修改 |
+| R | 读取公开 EEF/夹爪状态，按冻结的 `on_complete/on_timeout/on_unknown` 选择分支或 `stop` |
+| A | 现有动态 Agent 选择子目标、监督、恢复和停止；Planner 消费合法运行输入 |
+
+S/R 的条件由 `_observe` 实际读取，独立评价私有真值不进入执行程序。四臂继续绑定模型、processor、动作前缀、物理预算、原生结果、技术有效性与成本；程序用尽而缺少原生终态时保持 unknown。D 的原始指令、零模型请求和原生 success 已有[独立消费验收](../artifacts/framework15-20261115/state/evaluation/audits/framework15-D-base-s0-recovery1-zero-request-v2.json)；各臂的完整尝试记录见04。
+
+### 可读证据、SDK 输入与宿主补证
+
+[research_transport.py](src/rsi_vla/research_transport.py) 的 `readable_input` 与 `model_prompt` 供 `BoundedResearchAdapter.prepare_request` 和 [bounded_runner.child](src/rsi_vla/bounded_runner.py) 实际消费。`bounded_requests` 保存业务内容，`bounded_transports` 保存可逆传输；`sdk-input.json` 保存实际传给 `thread.turn` 的 prompt、模型、推理配置、开发者指令和响应 schema。返回后的 `sdk-input-consumption.json` 关联请求与实际 HTTP 计量证据；HTTP 序列化和模型实际关注内容仍为unknown。
+
+当前 Research 为 text-only：媒体路径、文字说明和图像字节分别记录，`image_bytes_sent=false`，视觉内容未知。ρA 的媒体引用选择进入模型输入；视觉诊断质量和实际媒体存储节省须有各自证据。
+
+启用 `readable_v1` 后，响应可在 `defer` 中提交 `evidence_requests: [{result_id, event_ids, reason}]`。`BoundedResearchAdapter.apply_response` 经 `ResearchTools.consume_evidence_requests` 读取精确合法开发事件，保存 `research_evidence_supplements`；`prepare_evidence_followup` 合并原选择与补证事件，生成新请求身份及父请求链接。后续派发仍核对新 permit、原 job 剩余额度和宿主准入。
+
+### 上下文ρC与有效ψ
+
+[relation_learning.py](src/rsi_vla/relation_learning.py) 的 `contextual_research_policy` 创建显式新版本ρC，按任务、算子、证据类别、可执行版本和数据条件分开上下文。`ResearchTools.research_relation_admission` 保存选择、理由及有限探索预留；`record_contextual_research_feedback` 关联实际回执，分开技术有效、筛选通过、任务收益、旧能力与成本。`learn_relations` 不把技术无效计成任务筛选负奖励，冻结继承时保留已用探索额度；技术、数据、预算及权限准入继续先行。旧 `rsi-relation-feedback-v1` 快照与筛选目标按原语义读取。
+
+ρA 继续优化记录事件覆盖与引用数量。`relation_consumption.evaluate_relation_consumption` 分别报告引用消费、实际 SDK prompt 字节、媒体写入和诊断质量的已知与未知。[历史回放](../artifacts/framework15-20261115/state/research/relation_replays/framework15-historical-v1.json)提供合法旧快照的决策依据，未执行分支收益保持未知。
+
+[effective_psi.py](src/rsi_vla/effective_psi.py) 的 `freeze_effective_psi/consume_effective_psi` 冻结实际程序、提示、ρC、检索、依赖、来源和开发成本，事实写入独立 `fact_memory_snapshots`。新请求通过 `domain_policy.effective_psi_ref` 绑定快照；没有实际策略变化就不创建后期ψ。[初始物化回执](../artifacts/framework15-20261115/state/research/policy_materialization/framework15-initial-complete.json)绑定独立 `framework15-research-base`，保留四臂 baseline。预留任务族和机制相对本轮开发划分，外部先验与历史暴露单列。
+
+### 从回执选择后继
+
+[task_continuation.py](src/rsi_vla/task_continuation.py) 的 `TaskContinuationBackend` 在 `rsi-task-completion-v1` 配置内消费有限 `continuation` 图，按原角色回执 `value` 的字段等值条件选择后继。操作继续交给 [task_completion.py](src/rsi_vla/task_completion.py)、既有 `Coordinator` 和隔离 `run_role`；pending、operation、receipt 与 reconcile 保持原提交关联。补证准备、Research反馈、有限试验、暂缓与结束是登记操作或终态，分支条件不提供新命令、permit 或额度。
+
+宿主先物化新 scope、注册配置、准入输入与适用 permit，再从聚合目录调用：
+
+```bash
+RPent/.venv/bin/python scripts/run_task_continuation.py status \
+  --root /path/to/new-task/operator/continuation \
+  --configuration /path/to/new-task/continuation-registration.json
+RPent/.venv/bin/python scripts/run_task_continuation.py reconcile \
+  --root /path/to/new-task/operator/continuation \
+  --configuration /path/to/new-task/continuation-registration.json \
+  --inputs /path/to/new-task/admission.json
+RPent/.venv/bin/python scripts/run_task_continuation.py advance \
+  --root /path/to/new-task/operator/continuation \
+  --configuration /path/to/new-task/continuation-registration.json \
+  --inputs /path/to/new-task/admission.json
+```
+
+`status` 返回检查点，`reconcile` 核对原操作，`advance` 在当前准入允许时派发后继。`event --event <signal.json>` 提交登记控制事件；`drive --inputs <admission.json>` 连续推进并在有限等待政策内重读资源输入，人工暂停、终止和提交未知仍返回检查点。Autoloop 使用 [autoloop_bridge.py](src/rsi_vla/autoloop_bridge.py) 的固定 `core_consumer="task_continuation"` 适配同一 CLI，不另建任务平台。历史任务及 permit 保留其原停止、期限和权限。
+
+### 原生 CPU 数据准备与θ×B交接
+
+[adapters/pi05_training.py](src/rsi_vla/adapters/pi05_training.py) 的 `prepare_cpu_demonstrations` 贯通固定来源示范、LeRobot 子集、匹配 RLinf/OpenPI 配方和原生 CPU dataloader；入口为 [prepare_pi05_training.py](../scripts/prepare_pi05_training.py) 的 `--cpu-pipeline`。许可、来源、动作语义、processor、归一化、评价隔离和产物计量随作业保存。[准备回执](../artifacts/framework15-20261115/training-preparation/readiness.json)确认真实 batch 已通过，数据仍为 `not_admitted_interface_batch_only`、训练步数为0；自主轨迹的 `autonomous_execution/not_admitted` 保持原来源。实际训练须另有示范准入与训练授权，checkpoint、原生加载和独立能力评价分别交接。
+
+[theta_b.py](src/rsi_vla/theta_b.py) 的 `freeze_theta_b/prepare_theta_b_cell/evaluate_theta_b_cell` 与 [prepare_theta_b.py](../scripts/prepare_theta_b.py) 冻结 B0/B1 内容、θ及processor；通过现有 `prepare_runtime` 准备单元，显式记录适用性unknown及请求/实际B的fallback。θ不存在时返回 `blocked_theta_unavailable`。[接口检查](../artifacts/framework15-20261115/training-preparation/theta-b-interface-check.json)只证明冻结和交接；未来θ更新后的适配收益仍需独立实验，生产准入继续走原评价/Gate。

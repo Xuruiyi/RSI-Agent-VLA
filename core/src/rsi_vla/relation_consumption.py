@@ -64,7 +64,24 @@ def evaluate_relation_consumption(store, output, *, research_request_ids=()):
                 Path(facts['evidence_ref'])]
         if not all(ref.is_file() for ref in refs):
             raise ValueError('actual Research consumer source is missing')
-        relations['rhoA'].update(value=True, source_refs=[str(ref) for ref in refs])
+        selection_report = dict(objective='recorded_event_coverage_minus_reference_cost',
+            selected_reference_count=sum(len(view.get('selected_media', [])) for view in actual_views),
+            sdk_prompt_bytes=None, persisted_media_bytes=None, diagnostic_quality=None,
+            media_mode='unknown', image_bytes_sent=None)
+        if actual.get('readable_evidence') is not None:
+            from .research_transport import sdk_input
+            sdk = store.get('research_sdk_inputs', request_id)
+            receipt = store.get('research_sdk_consumption', request_id)
+            if sdk != sdk_input(transport, sdk['output_schema']) or receipt.get('request_id') != request_id:
+                raise ValueError('actual SDK input differs from its readable business request')
+            if receipt.get('sdk_turn_returned') is not True or receipt.get('image_bytes_sent') is not False:
+                raise ValueError('readable Research input lacks its text-only SDK consumer receipt')
+            refs.extend([store.path('research_sdk_inputs', request_id),
+                         store.path('research_sdk_consumption', request_id)])
+            selection_report.update(sdk_prompt_bytes=len(sdk['prompt'].encode('utf-8')),
+                                    media_mode='text_only', image_bytes_sent=False)
+        relations['rhoA'].update(value=True, source_refs=[str(ref) for ref in refs],
+                                  measurement=selection_report)
     if relations['rhoA']['value'] is None:
         relations['rhoA']['missing'].append('No actual Research request/execution with candidate evidence selection')
     gate = context.get('relation_dispatch_admission')
@@ -75,10 +92,34 @@ def evaluate_relation_consumption(store, output, *, research_request_ids=()):
         if any(row.get('role') != 'development' or row['intervention'].get('information_scope') != 'development'
                for row in evidence):
             raise ValueError('dispatch gate cannot consume formal or sealed feedback')
-        decisions = [dict(state=row['state'], action=fixed_research_step(
-            rho, SimpleNamespace(state=gate['job_state_before_dispatch']), evidence_available=bool(evidence),
-            inspected=True, legal_repairs=['relation_feedback_update'], experiment_permitted=True,
-            state=row['state'])) for row in gate['decisions']]
+        from .relation_learning import CONTEXT_SCHEMA, contextual_research_decision, research_context, version_signature
+        if rho['rhoC'].get('type') == CONTEXT_SCHEMA:
+            from .contracts import RunBundle
+            saved = store.get('research_relation_selections', gate['selection_id'])
+            for key in ('rho_ref', 'source_result_ids', 'decisions', 'action', 'legal_repairs',
+                        'technical_admitted', 'data_admitted', 'job_state_before_dispatch'):
+                if gate.get(key) != saved.get(key):
+                    raise ValueError('actual contextual dispatch differs from its reserved selection')
+            decisions = []
+            for row in gate['decisions']:
+                category = ('technical_invalid_development' if any(r['invalid_count'] for r in evidence)
+                            else 'development_l0')
+                expected_context = research_context(task_key=row['state'], operator=gate['legal_repairs'][0],
+                    evidence_category=category, signature=version_signature(RunBundle(**bundle)),
+                    data_context=rho['rhoC']['data_context'])
+                if row['context'] != expected_context:
+                    raise ValueError('actual contextual dispatch changed operator/evidence/version/data context')
+                decision = contextual_research_decision(rho['rhoC'],
+                    SimpleNamespace(state=gate['job_state_before_dispatch']), context=expected_context,
+                    evidence_available=bool(evidence), inspected=True, legal_repairs=gate['legal_repairs'],
+                    experiment_permitted=True, technical_admitted=gate['technical_admitted'],
+                    data_admitted=gate['data_admitted'], exploration_used=row['exploration_used_before'])
+                decisions.append({'state': row['state'], **decision})
+        else:
+            decisions = [dict(state=row['state'], action=fixed_research_step(
+                rho, SimpleNamespace(state=gate['job_state_before_dispatch']), evidence_available=bool(evidence),
+                inspected=True, legal_repairs=['relation_feedback_update'], experiment_permitted=True,
+                state=row['state'])) for row in gate['decisions']]
         if decisions != gate['decisions'] or gate['action'] != 'prepare':
             raise ValueError('actual dispatch differs from independently recomputed rhoC')
         relations['rhoC'].update(value=bool(decisions) and all(row['action'] == 'bounded_experiment' for row in decisions),

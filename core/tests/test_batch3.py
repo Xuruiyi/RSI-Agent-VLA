@@ -16,9 +16,7 @@ class BoundedResponseTest(unittest.TestCase):
     result = test_research_tools.ResearchToolsTest.result
 
     def prepare(self, key="request"):
-        self.tools.domain_policy["rule_operators"] = list(
-            BoundedResearchAdapter.operators
-        )
+        self.tools.domain_policy["rule_operators"] = ["chunk_steps"]
         self.adapter = BoundedResearchAdapter(
             model="gpt-6.1-sol", reasoning_effort="high"
         )

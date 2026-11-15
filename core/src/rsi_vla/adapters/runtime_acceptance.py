@@ -3,14 +3,74 @@ import json
 from pathlib import Path
 
 from .rpent import closed_native_failure, execution_health
-from .runtime_closure import request_usage, transport_issues
+from .runtime_closure import read_model_events, request_usage, transport_issues
 
 
 def read(path):
     return json.loads(Path(path).read_text())
 
 
-def audit_sdk_tools(output, identity, events=None):
+def _common_internal_tools(root, identity, events):
+    """Validate explicit native subcalls before excluding them from SDK spans."""
+    declarations = [e for e in events if e.get('kind') == 'common_internal_tool_admission']
+    if not declarations:
+        return set(), set(), []
+    issues, starts, ends = [], set(), set()
+    try:
+        from robots.libero.execution_arms import validate_common_execution
+        context = read(root / 'runtime_context.json')
+        validate_common_execution(context['common_execution'])
+        if any(context.get(k) != v for k, v in identity.items()):
+            raise ValueError('common context identity mismatch')
+        by_sequence = {event['sequence']: event for event in events}
+        if len(by_sequence) != len(events):
+            raise ValueError('common events have duplicate sequences')
+        for declaration in declarations:
+            if any(declaration.get(k) != v for k, v in identity.items()):
+                raise ValueError('common admission identity mismatch')
+            start = by_sequence[declaration['tool_call_sequence']]
+            logical = by_sequence[declaration['logical_call_sequence']]
+            if (logical.get('kind') != 'common_execution_call_start'
+                    or logical.get('common_execution') != context['common_execution']
+                    or type(logical.get('max_chunks')) is not int
+                    or not 2 <= logical['max_chunks'] <= 24
+                    or start.get('kind') != 'tool_call' or start.get('tool') != 'vla_execute'
+                    or start['sequence'] in starts):
+                raise ValueError('unbound common internal admission')
+            terminals = [event for event in events if event.get('kind') == 'tool_end'
+                         and event.get('tool_call_sequence') == start['sequence']
+                         and event.get('logical_call_sequence') == logical['sequence']]
+            closures = [event for event in events if event.get('kind') == 'common_execution_call_end'
+                        and event.get('logical_call_sequence') == logical['sequence']]
+            if len(terminals) != 1 or len(closures) != 1:
+                raise ValueError('common internal terminal/parent closure missing')
+            end, closed = terminals[0], closures[0]
+            parent_starts = [event for event in events if event.get('kind') == 'tool_call'
+                             and event.get('tool') == 'vla_execute'
+                             and event['sequence'] < logical['sequence']]
+            parent_ends = [event for event in events if event.get('kind') == 'tool_end'
+                           and event.get('tool') == 'vla_execute'
+                           and 'tool_call_sequence' not in event
+                           and event['sequence'] > closed['sequence']]
+            if (not parent_starts or not parent_ends
+                    or end.get('tool') != 'vla_execute' or end.get('status') != 'completed'
+                    or not logical['sequence'] < start['sequence'] < declaration['sequence'] < end['sequence'] < closed['sequence']
+                    or any(any(event.get(k) != v for k, v in identity.items())
+                           for event in (start, logical, end, closed))):
+                raise ValueError('common internal call escapes its parent span')
+            starts.add(start['sequence'])
+            ends.add(end['sequence'])
+        for logical_id in {e['logical_call_sequence'] for e in declarations}:
+            logical = by_sequence[logical_id]
+            if sum(e['logical_call_sequence'] == logical_id for e in declarations) > logical['max_chunks'] - 1:
+                raise ValueError('common native subcalls exceed registered allowance')
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        issues.append('common internal tool evidence: ' + str(exc))
+        return set(), set(), issues
+    return starts, ends, issues
+
+
+def audit_sdk_tools(output, identity, events=None, *, require_sdk=True):
     """Reconcile unique SDK item IDs with the identity-bound dispatcher log.
 
     SDK delivery can stop after a tool has closed in L0. Missing SDK completion
@@ -19,8 +79,10 @@ def audit_sdk_tools(output, identity, events=None):
     root = Path(output)
     issues, tools, sdk_terminal_missing = [], {}, []
     paths = sorted(root.glob('codex_*.stream.jsonl'))
-    if not paths:
+    if not paths and require_sdk:
         issues.append('SDK tool stream missing')
+    if paths and not require_sdk:
+        issues.append('frozen execution arm unexpectedly produced an SDK stream')
     for path in paths:
         try:
             for line in path.read_text().splitlines():
@@ -54,6 +116,8 @@ def audit_sdk_tools(output, identity, events=None):
         except (OSError, ValueError) as exc:
             events = []
             issues.append(f'L0 tool events unavailable: {exc}')
+    internal_starts, internal_ends, internal_issues = _common_internal_tools(root, identity, events)
+    issues.extend(internal_issues)
     starts, spans, active, rejected = [], [], {}, []
     for event in events:
         kind = event.get('kind')
@@ -70,9 +134,13 @@ def audit_sdk_tools(output, identity, events=None):
             spans.append((event, event))
         elif kind == 'tool_call':
             starts.append(event)
+            if event.get('sequence') in internal_starts:
+                continue
             if active.get(name):
                 issues.append(f'{name}: overlapping L0 calls cannot be uniquely associated')
             active.setdefault(name, []).append(event)
+        elif event.get('sequence') in internal_ends:
+            continue
         elif active.get(name):
             start = active[name].pop(0)
             spans.append((start, event))
@@ -121,7 +189,7 @@ def audit_sdk_tools(output, identity, events=None):
         failed_issue = f'{item_id}: SDK tool status {item.get("status")}'
         if not admitted and failed_issue in issues:
             issues.remove(failed_issue)
-    if len(used) != len(spans):
+    if require_sdk and len(used) != len(spans):
         issues.append('L0 tools not covered by SDK stream')
     # Unassociated records remain in the union. For a confirmed budget
     # violation, allow every still-possible same-tool/time association: missing
@@ -155,6 +223,7 @@ def audit_sdk_tools(output, identity, events=None):
                 counted_tool_calls=len(attempts) + len(tools) - len(matched),
                 minimum_tool_calls=len(attempts) + len(tools) - len(associations),
                 l0_tool_calls=len(starts), l0_rejected_tool_calls=len(rejected), sdk_tool_calls=len(tools),
+                common_internal_tool_calls=len(internal_starts),
                 sdk_terminal_missing=sdk_terminal_missing)
 
 
@@ -195,13 +264,20 @@ def audit_native_persistence(output, identity, events=None):
     return dict(issues=issues, evidence_refs=refs, step=step)
 
 
-def inspect_attempt(output, *, require_vla=True, result_path=None):
+def inspect_attempt(output, *, require_vla=True, result_path=None, evaluation_ref=None, evaluation_store_ref=None):
     root = Path(output)
     context = read(root/'runtime_context.json')
     identity = {key: context[key] for key in ('run_id','episode_id','bundle_id','protocol_id')}
+    if evaluation_ref is not None:
+        if result_path is not None or evaluation_store_ref is None:
+            raise ValueError('versioned evaluation requires its trusted store root and no conflicting result path')
+        from ..development_reparse import resolve_development_evaluation
+        revision = resolve_development_evaluation(evaluation_ref, output, evaluation_store_ref=evaluation_store_ref)
+        result_path = revision['outputs']['independent_result_ref']
     checks, notes = {}, []
     confirmed_violations = []
-    tool_audit = audit_sdk_tools(root, identity)
+    frozen = context.get('execution_arm', {}).get('arm') in {'D', 'S', 'R'}
+    tool_audit = audit_sdk_tools(root, identity, require_sdk=not frozen)
     sdk_tools = tool_audit['tools']
     outside_tools = tool_audit['outside_tools']
     checks['all_tools_use_counted_dispatcher'] = (False if outside_tools else
@@ -228,8 +304,8 @@ def inspect_attempt(output, *, require_vla=True, result_path=None):
         health=execution_health(events, identity, source_ref=str(root/'action_events.jsonl'))
         checks['execution_health']=health['status']=='clear' and (result.get('execution_health') or {}).get('status','clear')=='clear'
         native=[json.loads(s) for s in (root/'environment_service/action_events.jsonl').read_text().splitlines()]
-        model_events=[json.loads(s) for s in (root/'model_requests.jsonl').read_text().splitlines()]
-        checks['model_transport'] = (not transport_issues(root, identity, model_events)
+        model_events=read_model_events(root, gate, identity)
+        checks['model_transport'] = (not transport_issues(root, identity, model_events, result_path=selected)
                                      and gate.get('cleanup_complete', True) is True)
         checks['tool_accounting'] = client['tool_calls'] == tool_audit['l0_tool_calls']
         checks['ordered_l0']=all(bound(e) and e['sequence']==i for stream in (events,native) for i,e in enumerate(stream))
@@ -264,9 +340,33 @@ def inspect_attempt(output, *, require_vla=True, result_path=None):
         admitted=[e for e in model_events if e['kind']=='request_admitted']
         checks['actual_model_configuration']=(bool(admitted) and all(e['model']=='gpt-6.1-sol'
             and e['reasoning_effort']=='medium' for e in admitted))
+        if frozen:
+            from robots.libero.execution_arms import validate_execution_arm
+            spec = validate_execution_arm(context['execution_arm'])
+            starts = [e for e in events if e['kind'] == 'episode_execution_start']
+            ends = [e for e in events if e['kind'] == 'episode_execution_end']
+            checks['execution_arm_consumption'] = (
+                len(starts) == len(ends) == 1
+                and starts[0].get('execution_arm') == spec
+                and ends[0].get('spec') == spec
+                and result.get('episode_execution', {}).get('spec') == spec
+                and context.get('relation_control') is None)
+            checks['actual_model_configuration'] = (
+                context.get('planner', {}).get('backend') == 'flash'
+                and not admitted and gate['requests_forwarded'] == 0)
+            if spec['arm'] == 'D':
+                instruction = starts[0].get('native_instruction') if len(starts) == 1 else None
+                instructed = [event for event in events if event['kind'] in {
+                    'vla_segment_start', 'vla_segment_end', 'inference_start', 'action_proposal'}]
+                checks['direct_original_instruction'] = (
+                    isinstance(instruction, str) and bool(instruction) and bool(instructed)
+                    and all(event.get('instruction') == instruction for event in instructed)
+                    and result.get('episode_execution', {}).get('native_instruction') == instruction
+                    and not any(event['kind'] in {'relation_route_decision', 'relation_policy_loaded'}
+                                for event in events))
         if bound(gate) and gate['requests_forwarded'] > context['limits']['model_requests']:
             confirmed_violations.append('resource_limits')
-        checks['request_budget']=(gate['hard_request_cap_enforced'] is True and 0<gate['requests_forwarded']<=context['limits']['model_requests']
+        checks['request_budget']=(gate['hard_request_cap_enforced'] is True and (0 if frozen else 1)<=gate['requests_forwarded']<=context['limits']['model_requests']
             and gate['requests_forwarded']==len(admitted) and gate['active_requests_at_close']==0)
         stop_path=Path(context.get('budget_stop_ref', root/'budget_stop.json'))
         if stop_path.exists():

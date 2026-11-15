@@ -4,16 +4,28 @@ import json
 import os
 import sys
 import time
+import hashlib
 from dataclasses import asdict, replace
 from pathlib import Path
 
 from .phase_receipts import read_phase, write_phase
-from .research_transport import model_prompt, unpack
+from .research_transport import sdk_input, unpack
 from .storage import atomic_json
 
 
 def read(path):
     return json.loads(Path(path).read_text())
+
+
+def permitted_input(permit):
+    """Verify compact referenced input against the host's immutable content grant."""
+    if 'input' in permit:
+        return permit['input']
+    path = Path(permit['input_ref']).resolve(strict=True)
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != permit.get('input_sha256'):
+        raise PermissionError('referenced Research input differs from authorized content')
+    return json.loads(payload)
 
 
 def validate_permit(tools, transport, permit, *, root, output):
@@ -44,13 +56,14 @@ def validate_permit(tools, transport, permit, *, root, output):
         "output_dir": str(Path(output).resolve()),
         "model": "gpt-6.1-sol",
         "reasoning_effort": "high",
-        "input": transport,
         "job_limits": tools.job.state["limits"],
     }
     if any(permit.get(k) != v for k, v in expected.items()):
         raise PermissionError(
             "permit does not match new job/bundle/protocol/input/output/budget"
         )
+    if permitted_input(permit) != transport:
+        raise PermissionError('permit does not bind this complete Research transport')
     from .task_policy import number
 
     proposal = task_policy(tools.protocol).get(
@@ -135,7 +148,7 @@ def child(output):
         )
     if (
         not permit.get("authorized")
-        or permit.get("input") != transport
+        or permitted_input(permit) != transport
         or not (output / "dispatch.json").exists()
     ):
         raise PermissionError("child lacks matching new one-request dispatch")
@@ -146,20 +159,26 @@ def child(output):
     atomic_json(
         output / "child-started.json", {"request_id": unpack(transport)["request_id"]}
     )
+    actual_input = sdk_input(transport, read(output / "response-schema.json"))
+    atomic_json(output / "sdk-input.json", actual_input)
     config = _research_codex_config(output)
     with openai_codex.Codex(config=config) as client:
         thread = client.thread_start(
             model="gpt-6.1-sol",
             approval_mode=openai_codex.ApprovalMode.deny_all,
             sandbox=openai_codex.Sandbox.read_only,
-            developer_instructions="Use only supplied evidence. Do not call tools, read files, access networks, or launch experiments.",
+            developer_instructions=actual_input["developer_instructions"],
         )
         result = thread.turn(
-            model_prompt(transport),
+            actual_input["prompt"],
             model="gpt-6.1-sol",
             effort=ReasoningEffort.high,
-            output_schema=read(output / "response-schema.json"),
+            output_schema=actual_input["output_schema"],
         ).run()
+    atomic_json(output / "sdk-input-consumption.json", {
+        "request_id": actual_input["request_id"], "sdk_input_ref": str(output / "sdk-input.json"),
+        "sdk_turn_returned": True, "media_mode": "text_only", "image_bytes_sent": False,
+        "http_evidence_ref": str(output / "model_requests.jsonl"), "model_attention": "unknown"})
     atomic_json(
         output / "sdk-result.json",
         {
@@ -167,6 +186,21 @@ def child(output):
             "final_response": result.final_response,
         },
     )
+
+
+def archive_sdk_input(tools, output, transport):
+    """Preserve the actual validated SDK bytes under its existing canonical name."""
+    output = Path(output)
+    actual = read(output/'sdk-input.json')
+    if actual != sdk_input(transport, read(output/'response-schema.json')):
+        raise ValueError('actual SDK input differs from prepared request')
+    target = tools.store.path('research_sdk_inputs', unpack(transport)['request_id'])
+    if target.exists():
+        if read(target) != actual:
+            raise ValueError('stored SDK input differs from actual consumed input')
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.link(output/'sdk-input.json', target)
 
 
 def _reconcile(tools, adapter, output, *, cost_limit):
@@ -177,6 +211,7 @@ def _reconcile(tools, adapter, output, *, cost_limit):
     if tools.store.get("bounded_transports", request["request_id"]) != transport:
         raise ValueError("saved request differs from this job's prepared input")
     context = read(output / "runtime_context.json")
+    permit = read(context['authorization_ref'])
     if (
         any(context.get(k) != request[k] for k in ("job_id", "bundle_id"))
         or context["protocol_id"] != tools.protocol["protocol_id"]
@@ -201,6 +236,17 @@ def _reconcile(tools, adapter, output, *, cost_limit):
         if admitted
         else None
     )
+    if (output / "sdk-input.json").exists():
+        actual_input = read(output / "sdk-input.json")
+        if actual_input != sdk_input(transport, read(output / "response-schema.json")):
+            raise ValueError("actual SDK input differs from the prepared business request")
+        if permit.get('input_ref'):
+            archive_sdk_input(tools, output, transport)
+        else:
+            tools.store.put("research_sdk_inputs", request["request_id"], actual_input)
+        receipt_path = output / "sdk-input-consumption.json"
+        if receipt_path.exists():
+            tools.store.put("research_sdk_consumption", request["request_id"], read(receipt_path))
     if facts:
         adapter.record_execution(tools, request["request_id"], costs, facts)
     else:
@@ -295,9 +341,12 @@ def reconcile(tools, adapter, output, *, cost_limit):
     ):
         raise ValueError("reconciliation input belongs to another job")
     key = request["request_id"] + "-derived"
-    begin(tools, key)
     context = read(output / "runtime_context.json")
     permit = read(context["authorization_ref"])
+    if permit.get('input_ref') and (output/'sdk-input.json').exists():
+        # This is an alias of an already supervised inode, not new derived bytes.
+        archive_sdk_input(tools, output, read(output/'request.json'))
+    begin(tools, key)
     try:
         return _reconcile(tools, adapter, output, cost_limit=cost_limit)
     finally:
@@ -394,10 +443,15 @@ def execute(
     with lock_factory():
         from .process_accounting import StorageMeter
 
+        if permit.get('input_ref'):
+            context['storage_write_roots'] = [*context['storage_write_roots'], permit['input_ref']]
         storage_meter = StorageMeter(context["storage_write_roots"])
         context["storage_baseline"] = storage_meter.baseline
         output.mkdir(parents=True, exist_ok=False)
-        atomic_json(output / "request.json", transport)
+        if permit.get('input_ref'):
+            os.link(permit['input_ref'],output/'request.json')
+        else:
+            atomic_json(output / "request.json", transport)
         atomic_json(
             output / "response-schema.json",
             adapter.response_schema(request["request_id"], tools=tools),
@@ -473,10 +527,18 @@ def execute(
                     costs["cached_input_tokens"] = sum(cached)
             from .process_accounting import accounted_storage_bytes, snapshot
 
-            costs["artifact_bytes"] = max(
-                accounted_storage_bytes(output),
-                storage_meter.sample()["cumulative_new_bytes_lower_bound"],
-            )
+            if permit.get('input_ref'):
+                # The request hard link aliases the prepare-owned canonical
+                # transport; the native meter has that inode in its baseline.
+                costs['artifact_bytes'] = max(
+                    read(output/'supervisor.json').get('storage_bytes', 0),
+                    storage_meter.sample()['cumulative_new_bytes_lower_bound'],
+                )
+            else:
+                costs["artifact_bytes"] = max(
+                    accounted_storage_bytes(output),
+                    storage_meter.sample()["cumulative_new_bytes_lower_bound"],
+                )
             atomic_json(
                 output / "execution-costs.json",
                 {

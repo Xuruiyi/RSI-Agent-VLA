@@ -10,6 +10,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
 
 
 DYNAMIC_LOCK = "/tmp/rsi-agent-vla-dynamic.lock"
@@ -40,7 +41,7 @@ class TrainingBudget:
 def require_training_permit(permit, *, run_id, budget, dataset_root, model_path,
                             kind="pi05-training-pilot"):
     """A simulation permit never authorizes training."""
-    if kind not in {"pi05-training-pilot", "pi05-load-check"} or permit.get("kind") != kind or permit.get("authorized") is not True:
+    if kind not in {"pi05-training-pilot", "pi05-training-learning", "pi05-load-check"} or permit.get("kind") != kind or permit.get("authorized") is not True:
         raise PermissionError(f"explicit {kind} authorization required")
     if not run_id or permit.get("run_id") != run_id:
         raise PermissionError("training authorization run_id mismatch")
@@ -50,6 +51,62 @@ def require_training_permit(permit, *, run_id, budget, dataset_root, model_path,
     allowed = TrainingBudget(**permit["budget"])
     if any(value > asdict(allowed)[key] for key, value in asdict(budget).items()):
         raise PermissionError("requested training budget exceeds authorization")
+
+
+def require_scoped_training_permit(permit, *, run_id, budget, dataset_root,
+                                   model_path, artifact_root, kind, cuda_device,
+                                   require_submission=False):
+    """Check live task authority and host reservation at the process boundary."""
+    require_training_permit(permit, run_id=run_id, budget=budget,
+                            dataset_root=dataset_root, model_path=model_path, kind=kind)
+    if kind != "pi05-load-check" and budget.artifact_bytes > 48 * 1024**3:
+        raise PermissionError("task single-training artifact cap is 48 GiB")
+    if type(permit.get("cuda_device")) is not int or permit["cuda_device"] != cuda_device:
+        raise PermissionError("training GPU differs from the authorized physical device")
+    scope_path = Path(permit["scope_ref"]).resolve()
+    scope = json.loads(scope_path.read_text())
+    if (scope.get("schema") != "rsi-midterm-scope-v1" or scope.get("status") != "active"
+            or scope.get("authorized") is not True or scope.get("dynamic_authorized") is not True
+            or permit.get("scope_id") != scope.get("scope_id")):
+        raise PermissionError("active task-wide training scope required")
+    if scope.get("owner_uid") != os.geteuid() or permit.get("owner_uid") != os.geteuid():
+        raise PermissionError("training task owner mismatch")
+    write_root = Path(scope["write_root"]).resolve()
+    if (Path(permit["write_root"]).resolve() != write_root
+            or not Path(artifact_root).resolve().is_relative_to(write_root)
+            or not scope_path.is_relative_to(write_root)):
+        raise PermissionError("training artifact/scope lies outside the task write domain")
+    now = datetime.now(timezone.utc)
+    def utc(value):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise PermissionError("training authority requires timezone-aware UTC expiry")
+        return parsed
+    expiry = min(utc(scope["expires_at"]), utc(permit["expires_at"]))
+    if now < utc(scope["accepted_at"]) or (expiry - now).total_seconds() < budget.deadline_seconds:
+        raise PermissionError("training complete lifecycle would exceed task/permit expiry")
+    p1 = json.loads(Path(scope["p1_acceptance_ref"]).read_text())
+    if (p1.get("schema") != "rsi-midterm-p1-acceptance-v1"
+            or p1.get("scope_id") != scope["scope_id"] or p1.get("status") != "passed"):
+        raise PermissionError("current-task unattended P1 acceptance required before training/loading")
+    if kind == "pi05-training-pilot" and permit.get("pilot_disposition") != "resource_only_no_capability_selection":
+        raise PermissionError("pilot must predeclare no capability-based checkpoint selection")
+    from .midterm_host import MidtermLedger
+    needed = {"gpu_seconds": budget.gpu_device_seconds, "storage_bytes": budget.artifact_bytes,
+              "current_disk_bytes": budget.artifact_bytes}
+    if kind == "pi05-load-check":
+        needed["load_checks"] = 1
+    else:
+        needed["training_starts"] = 1
+        if kind == "pi05-training-pilot":
+            needed["training_pilots"] = 1
+    reservation = MidtermLedger(scope_path, permit["accounting_ref"]).validate_reservation(
+        permit["operation_id"], budget=needed, phase_ref=permit["phase_ref"],
+        gpu_devices=[cuda_device])
+    if require_submission and not reservation.get("submitted_at"):
+        raise PermissionError("host must persist the submitted operation before the GPU consumer starts")
+    return {"scope_id": scope["scope_id"], "operation_id": permit["operation_id"],
+            "reservation": reservation, "expires_at": expiry.isoformat()}
 
 
 @contextmanager
@@ -124,6 +181,12 @@ def _refresh_owned(owned, marker):
             if key not in owned and current["ppid"] in live_parents:
                 owned[key] = current
                 changed = True
+    return _live_owned(owned)
+
+
+def _live_owned(owned):
+    """Check every observed PID's exact birth identity without rescanning the host."""
+    uid = os.geteuid()
     live = []
     for pid, birth in owned:
         try:
@@ -160,13 +223,14 @@ def _signal_owned(identity, sig):
             os.close(descriptor)
 
 
-def _cleanup_owned(process, owned, marker, deadline, reserve):
+def _cleanup_owned(process, owned, marker, deadline, reserve, remaining=None):
     started = time.monotonic()
     term_until = min(deadline, started + min(5.0, reserve / 3))
     signaled = set()
     errors = []
-    while True:
+    if not remaining:
         remaining = _refresh_owned(owned, marker)
+    while True:
         if not remaining:
             break
         now = time.monotonic()
@@ -183,8 +247,13 @@ def _cleanup_owned(process, owned, marker, deadline, reserve):
         if now >= deadline:
             break
         time.sleep(min(0.02, max(0.001, deadline - time.monotonic())))
+        remaining = _live_owned(owned)
+        if not remaining:
+            # Discover late or detached descendants after observed members exit.
+            # While they are alive, check their exact identities directly so a
+            # host-wide scan does not delay TERM/KILL past the cleanup deadline.
+            remaining = _refresh_owned(owned, marker)
     process.poll()
-    remaining = _refresh_owned(owned, marker)
     return {"cleanup_confirmed": not remaining, "remaining_owned_pids": remaining,
             "cleanup_seconds": time.monotonic() - started, "cleanup_errors": errors,
             "owned_pid_identities": [{"pid": pid, "start_ticks": birth} for pid, birth in owned],
@@ -208,8 +277,10 @@ def supervise_process(command, *, budget, artifact_root, env=None, poll_seconds=
     marker = str(root.resolve())
     if not Path("/proc/self/stat").is_file():
         raise RuntimeError("Linux /proc ownership tracking is required")
+    discovery_started = time.monotonic()
     if _refresh_owned({}, marker):
         raise RuntimeError("a previous process still carries this job's ownership marker")
+    discovery_reserve = time.monotonic() - discovery_started
     reserve = min(30.0, budget.deadline_seconds * 0.2) if cleanup_seconds is None else cleanup_seconds
     if not 0 < reserve < budget.deadline_seconds:
         raise ValueError("cleanup reserve must be positive and smaller than the total budget")
@@ -218,9 +289,12 @@ def supervise_process(command, *, budget, artifact_root, env=None, poll_seconds=
     child_env.update({JOB_MARKER: marker, "RAY_ADDRESS": "local", "RAY_TMPDIR": ray_paths["ray_tmpdir"]})
     started = time.monotonic()
     deadline = started + budget.deadline_seconds
-    work_deadline = deadline - reserve
+    # Include the observed host-discovery cost in the existing hard envelope.
+    # TERM/KILL grace alone does not cover the final complete member scan.
+    work_deadline = deadline - reserve - discovery_reserve
     stop_reason = None
     owned = {}
+    remaining = None
     raised = None
     with (root / "trainer.log").open("xb") as output:
         process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
@@ -230,7 +304,7 @@ def supervise_process(command, *, budget, artifact_root, env=None, poll_seconds=
             owned[(process.pid, initial["start_ticks"])] = initial
         try:
             while True:
-                _refresh_owned(owned, marker)
+                remaining = _refresh_owned(owned, marker)
                 if time.monotonic() >= work_deadline:
                     stop_reason = "wall_or_device_reservation_limit"
                 elif artifact_size(root) >= budget.artifact_bytes:
@@ -242,7 +316,7 @@ def supervise_process(command, *, budget, artifact_root, env=None, poll_seconds=
             raised = exc
             stop_reason = "supervisor_exception"
         finally:
-            cleanup = _cleanup_owned(process, owned, marker, deadline, reserve)
+            cleanup = _cleanup_owned(process, owned, marker, deadline, reserve, remaining)
     final_bytes = artifact_size(root)
     elapsed = time.monotonic() - started
     report = {"returncode": process.returncode, "stop_reason": stop_reason,
@@ -250,7 +324,8 @@ def supervise_process(command, *, budget, artifact_root, env=None, poll_seconds=
               "gpu_device_seconds_envelope": elapsed * budget.reserved_devices,
               "reserved_devices": budget.reserved_devices,
               "artifact_bytes_before_report": final_bytes,
-              "cleanup_reserve_seconds": reserve,
+              "cleanup_reserve_seconds": reserve + discovery_reserve,
+              "cleanup_discovery_reserve_seconds": discovery_reserve,
               "resource_limits_satisfied": elapsed <= budget.deadline_seconds and final_bytes <= budget.artifact_bytes,
               **ray_paths,
               **cleanup,

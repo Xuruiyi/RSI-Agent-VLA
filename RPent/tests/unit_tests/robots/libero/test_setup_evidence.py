@@ -214,6 +214,7 @@ def test_current_installed_reset_body_uses_the_same_observed_dispatch(tmp_path):
 
 def _closed_context(tmp_path, *, native=False, pending=False):
     context = _context(tmp_path)
+    journal = RuntimeJournal(context)
     identity = {
         key: context[key]
         for key in (
@@ -255,6 +256,7 @@ def _closed_context(tmp_path, *, native=False, pending=False):
             "truncated": False,
             "runtime": {
                 "identity": identity,
+                "action_events_ref": str(journal.events_path),
                 "environment_service": {"costs_ref": str(path)},
             },
         },

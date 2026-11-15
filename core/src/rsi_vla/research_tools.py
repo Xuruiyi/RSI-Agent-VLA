@@ -46,6 +46,24 @@ def _validate_hypotheses(hypotheses, minimum):
         raise ValueError(f"retain at least {minimum} distinct testable explanation(s)")
 
 
+def opportunity_source_eligibility(source, evidence):
+    """Evaluate the existing source/evidence gates without creating an opportunity."""
+    outcomes = {row['outcome'] for result in evidence for row in result['assignments'] if row['validity'] == 'valid'}
+    outcomes.update(result['outcome'] for result in evidence if not result['assignments'])
+    diagnostic = [result for result in evidence if result['data_refs'] and any(
+        row['validity'] == 'invalid' and row['outcome'] == 'unknown' and row.get('evidence_ref') in result['data_refs']
+        for row in result['assignments'])]
+    error = None
+    if source == 'normal' and 'success' not in outcomes:
+        error = 'normal opportunity needs successful execution evidence'
+    if source == 'failure' and not outcomes.intersection({'failure','unknown'}):
+        error = 'failure opportunity needs failed or unknown execution evidence'
+    if source == 'technical_diagnostic' and not diagnostic:
+        error = 'technical diagnosis requires referenced invalid/unknown execution evidence'
+    return {'eligible':error is None,'error':error,'source':source,'valid_outcomes':sorted(outcomes),
+            'technical_diagnostic_result_ids':[row['result_id'] for row in diagnostic]}
+
+
 class ResearchTools:
     def __init__(self, store, job, protocol, *, domain_policy):
         if job.store is not store:
@@ -224,20 +242,144 @@ class ResearchTools:
                     inspected=inspected, experiment_permitted=experiment_permitted, state=state),
                 "execution": "prepared_only"}
 
-    def research_relation_admission(self, result_ids, states=None, legal_repairs=()):
-        """Consume rhoC for preparation only; Runtime admission remains host-owned."""
+    def research_relation_admission(self, result_ids, states=None, legal_repairs=(), *,
+                                    selection_id=None, technical_admitted=False, data_admitted=False):
+        """Persist context decisions and finite exploration reservations, without dispatch."""
         from .cooperation import fixed_research_step
+        from .relation_learning import (CONTEXT_SCHEMA, contextual_research_decision,
+                                        research_context, version_signature)
         evidence = self.query_development(result_ids)
         contexts = list(states) if states is not None else sorted({
             row["task_key"] for result in evidence for row in result["assignments"]})
         rho = self.store.get("rho", self.base.rho_ref)
-        decisions = [{"state": state, "action": fixed_research_step(rho, self.job,
-            evidence_available=bool(evidence), inspected=True, legal_repairs=legal_repairs,
-            experiment_permitted=bool(legal_repairs), state=state)} for state in contexts]
-        return {"rho_ref": self.base.rho_ref, "decisions": decisions,
+        if rho["rhoC"].get("type") != CONTEXT_SCHEMA:
+            decisions = [{"state": state, "action": fixed_research_step(rho, self.job,
+                evidence_available=bool(evidence), inspected=True, legal_repairs=legal_repairs,
+                experiment_permitted=bool(legal_repairs), state=state)} for state in contexts]
+        else:
+            if len(legal_repairs) != 1:
+                raise ValueError("contextual rhoC selects one registered operator per decision")
+            if selection_id is not None and self.store.path("research_relation_selections", selection_id).exists():
+                previous = self._owned("research_relation_selections", selection_id)
+                if (previous["source_result_ids"] != list(result_ids) or previous["states"] != contexts
+                        or previous["legal_repairs"] != list(legal_repairs)
+                        or previous["technical_admitted"] != technical_admitted
+                        or previous["data_admitted"] != data_admitted):
+                    raise ValueError("conflicting contextual research selection")
+                return previous
+            reservations = {row["selection_id"]: row for row in rho["rhoC"].get("exploration_reservations", [])}
+            reservations.update({row["selection_id"]: row for row in self.store.all("research_relation_selections")
+                if row.get("rho_ref") == self.base.rho_ref and row.get("protocol_id") == self.protocol["protocol_id"]})
+            reserved = sum(row.get("exploration_count", 0) for row in reservations.values())
+            decisions = []
+            for state in contexts:
+                category = ("technical_invalid_development" if any(row["invalid_count"] for row in evidence)
+                            else "development_l0")
+                context = research_context(task_key=state, operator=legal_repairs[0], evidence_category=category,
+                    signature=version_signature(self.base), data_context=rho["rhoC"]["data_context"])
+                decision = contextual_research_decision(rho["rhoC"], self.job, context=context,
+                    evidence_available=bool(evidence), inspected=True, legal_repairs=legal_repairs,
+                    experiment_permitted=bool(legal_repairs), technical_admitted=technical_admitted,
+                    data_admitted=data_admitted, exploration_used=reserved)
+                decisions.append({"state": state, **decision})
+                reserved += int(decision["exploration"])
+        selection = {"rho_ref": self.base.rho_ref, "decisions": decisions,
                 "action": "prepare" if decisions and all(row["action"] == "bounded_experiment"
                                                          for row in decisions) else "defer",
                 "execution": "prepared_only", "dynamic_execution_authorized": False}
+        if rho["rhoC"].get("type") == CONTEXT_SCHEMA and selection_id is not None:
+            selection.update(selection_id=selection_id, source_result_ids=list(result_ids), states=contexts,
+                legal_repairs=list(legal_repairs), technical_admitted=technical_admitted,
+                data_admitted=data_admitted, job_state_before_dispatch=dict(self.job.state),
+                exploration_count=sum(int(row["exploration"]) for row in decisions)
+                                  if selection["action"] == "prepare" else 0)
+            return self._save("research_relation_selections", selection_id, selection)
+        return selection
+
+    def record_contextual_research_feedback(self, feedback_id, *, selection_id, result_id=None,
+                                           technical_valid=None, screening_pass=None, task_gain=None,
+                                           old_capability=None, costs=None, source_refs=()):
+        """Consume a host-reviewed execution/development receipt; unknown dimensions stay null."""
+        selection = self._owned("research_relation_selections", selection_id)
+        if selection["action"] != "prepare":
+            raise ValueError("feedback needs an admitted contextual selection")
+        refs = list(source_refs)
+        if result_id is not None:
+            if result_id in selection["source_result_ids"]:
+                raise ValueError("unexecuted selection cannot relabel its trigger evidence as new feedback")
+            raw = self.store.get("development_results", result_id)
+            plans = [row for row in self.store.all("research_experiments")
+                     if row.get("job_id") == self.job.state["job_id"]
+                     and row.get("bundle_id") == raw["bundle_id"]
+                     and row.get("experiment_id") == selection_id + "-experiment"]
+            if not plans:
+                raise ValueError("feedback needs the selected experiment's new development result")
+            result = self.query_development([result_id], bundle_ids=[raw["bundle_id"]])[0]
+            if not {a["task_key"] for a in result["assignments"]} <= set(selection["states"]):
+                raise ValueError("feedback result belongs to another contextual task")
+            if not set(selection["legal_repairs"]) <= set(result["intervention"]):
+                raise ValueError("feedback result did not consume the selected operator")
+            derived_valid = all(a["validity"] == "valid" for a in result["assignments"])
+            if technical_valid is not None and technical_valid != derived_valid:
+                raise ValueError("technical feedback conflicts with development facts")
+            technical_valid = derived_valid
+            checks = result["intervention"].get("screening_checks")
+            if checks and all(type(v) is bool for v in checks.values()):
+                derived_pass = all(checks.values())
+                if screening_pass is not None and screening_pass != derived_pass:
+                    raise ValueError("screening feedback conflicts with development facts")
+                screening_pass = derived_pass
+            costs = result["costs"] if costs is None else costs
+            refs.append(str(self.store.path("development_results", result_id).resolve()))
+        if not refs or any(not Path(ref).is_file() for ref in refs):
+            raise ValueError("contextual feedback needs existing host evidence receipts")
+        if any(value is not None and type(value) is not bool
+               for value in (technical_valid, screening_pass, old_capability)):
+            raise ValueError("technical/screening/old-capability feedback is boolean or unknown")
+        if task_gain is not None and (type(task_gain) not in (int, float) or not isfinite(task_gain)):
+            raise ValueError("task gain must be a finite comparison or unknown")
+        if screening_pass is True and technical_valid is not True:
+            raise ValueError("screening pass cannot bypass technical validity")
+        feedback = dict(technical_valid=technical_valid, screening_pass=screening_pass,
+                        task_gain=task_gain, old_capability=old_capability,
+                        costs=None if costs is None else _costs(costs))
+        rows = []
+        for index, decision in enumerate(selection["decisions"]):
+            if result_id is not None and decision["state"] not in {a["task_key"] for a in result["assignments"]}:
+                continue
+            if "context" not in decision:
+                raise ValueError("legacy feedback retains its historical consumer")
+            rows.append(self._save("contextual_research_feedback", feedback_id + "-" + str(index), {
+                "schema": "rsi-contextual-research-feedback-v2", "feedback_id": feedback_id + "-" + str(index),
+                "selection_id": selection_id, "rho_ref": selection["rho_ref"],
+                "context": decision["context"], "feedback": feedback, "result_id": result_id,
+                "source_refs": refs, "attribution": "observational_not_causal"}))
+        return {"feedback_id": feedback_id, "selection_id": selection_id, "feedback": feedback,
+                "rows": rows, "action": "feedback_recorded", "execution_authorized": False}
+
+    def consume_evidence_requests(self, request_id, requests):
+        """Host-read only exact registered development events, never model-supplied paths."""
+        request = self.store.get("bounded_requests", request_id)
+        if request["job_id"] != self.job.state["job_id"] or request["bundle_id"] != self.base.bundle_id:
+            raise ValueError("supplement request belongs to another job")
+        policy = request.get("evidence_read_policy")
+        if policy is None or not isinstance(requests, list) or len(requests) > policy["max_read_requests"]:
+            raise ValueError("evidence requests exceed the registered legal-event read bound")
+        legal = {row["result_id"] for row in request["evidence"]}
+        reads = []
+        for row in requests:
+            if (not isinstance(row, dict) or set(row) != {"result_id", "event_ids", "reason"}
+                    or row["result_id"] not in legal or not isinstance(row["reason"], str) or not row["reason"].strip()
+                    or not isinstance(row["event_ids"], list) or not row["event_ids"]
+                    or any(not isinstance(value, str) or not value for value in row["event_ids"])
+                    or len(row["event_ids"]) != len(set(row["event_ids"]))
+                    or len(row["event_ids"]) > policy["max_events_per_read"]):
+                raise ValueError("evidence request must name bounded exact legal development event IDs")
+            reads.append({"reason": row["reason"], **self.read_development_events(row["result_id"], row["event_ids"])})
+        return self._save("research_evidence_supplements", request_id, {
+            "request_id": request_id, "requests": requests, "reads": reads,
+            "action": "evidence_prepared" if reads else "no_supplement_requested",
+            "execution_authorized": False, "media_mode": "text_only"})
 
     def plan_relation_experiment(self, experiment_id, *, opportunity_id, bundle_id,
                                  relations, criterion_ref, distinguishing_prediction,
@@ -285,18 +427,9 @@ class ResearchTools:
             raise ValueError("exploration requires a registered new-protocol scope")
         if not external_value or (exploration is None and (not evidence or not any(r["data_refs"] for r in evidence))):
             raise ValueError("opportunity needs external value and legal evidence")
-        outcomes = {row["outcome"] for r in evidence for row in r["assignments"]
-                    if row["validity"] == "valid"}
-        outcomes.update(r["outcome"] for r in evidence if not r["assignments"])
-        if source == "normal" and "success" not in outcomes:
-            raise ValueError("normal opportunity needs successful execution evidence")
-        if source == "failure" and not outcomes.intersection({"failure", "unknown"}):
-            raise ValueError("failure opportunity needs failed or unknown execution evidence")
-        diagnostic = [r for r in evidence if r["data_refs"] and
-            any(row["validity"] == "invalid" and row["outcome"] == "unknown" and row.get("evidence_ref") in r["data_refs"]
-                for row in r["assignments"])]
-        if source == "technical_diagnostic" and not diagnostic:
-            raise ValueError("technical diagnosis requires referenced invalid/unknown execution evidence")
+        eligibility = opportunity_source_eligibility(source, evidence)
+        if not eligibility['eligible']:
+            raise ValueError(eligibility['error'])
         _validate_hypotheses(competing_explanations, _minimum_hypotheses(
             self.protocol, diagnostic=source == "technical_diagnostic"))
         goal_review = None
@@ -977,8 +1110,14 @@ class BoundedResearchAdapter(ResearchLLMAdapter):
             )
         if minimum == 1:
             envelope["instructions"] += " One testable explanation is sufficient; add alternatives when they affect the test."
-        from .research_transport import select_input
-        envelope = select_input(tools, envelope)
+        from .research_transport import select_input, readable_input
+        envelope = readable_input(tools, select_input(tools, envelope))
+        effective_ref = tools.domain_policy.get("effective_psi_ref")
+        if effective_ref is not None:
+            from .effective_psi import consume_effective_psi
+            envelope["effective_psi"] = consume_effective_psi(tools, effective_ref)
+        if tools.domain_policy.get("evidence_followup") is not None:
+            envelope["evidence_followup"] = tools.domain_policy["evidence_followup"]
         tools.store.put("bounded_requests", request_id, envelope)
         from .research_transport import pack
         transport = pack(envelope)
@@ -1082,12 +1221,47 @@ class BoundedResearchAdapter(ResearchLLMAdapter):
         if tools is not None and tools.store.get("bounded_requests", request_id).get("opportunity_only") is True:
             properties["decision"]["enum"] = ["propose_goal", "defer"]
             properties["intervention"] = {"anyOf": [{"type": "null"}]}
+        if tools is not None and tools.store.get("bounded_requests", request_id).get("evidence_read_policy"):
+            policy = tools.store.get("bounded_requests", request_id)["evidence_read_policy"]
+            properties["evidence_requests"] = {"type": "array", "maxItems": policy["max_read_requests"],
+                "items": {"type": "object", "additionalProperties": False,
+                    "properties": {"result_id": text, "reason": text,
+                        "event_ids": {"type": "array", "minItems": 1, "maxItems": policy["max_events_per_read"],
+                                      "items": text}}, "required": ["result_id", "event_ids", "reason"]}}
         return {
             "type": "object",
             "additionalProperties": False,
             "properties": properties,
             "required": list(properties),
         }
+
+    def prepare_evidence_followup(self, tools, *, parent_request_id, request_id,
+                                  max_input_tokens, max_output_tokens):
+        """Prepare a new bounded business request from a consumed legal read receipt."""
+        parent = tools.store.get("bounded_requests", parent_request_id)
+        supplement = tools._owned("research_evidence_supplements", parent_request_id)
+        if not supplement["reads"]:
+            raise ValueError("follow-up needs a consumed legal evidence request")
+        wanted = {row["result_id"]: set() for row in parent["evidence"]}
+        view_to_results = {}
+        for row in parent["evidence"]:
+            view_to_results.setdefault(row["intervention"].get("evidence_view_id"), []).append(row["result_id"])
+        for view in parent.get("evidence_views", []):
+            for result_id in view_to_results.get(view["view_id"], []):
+                wanted[result_id].update(e["event_id"] for e in view["l0"])
+        for read in supplement["reads"]:
+            wanted[read["result_id"]].update(e["event_id"] for e in read["events"])
+        domain = {**tools.domain_policy, "evidence_input": {"mode": "selected_l0",
+            "reason": "host-consumed supplemental development events", "event_ids": {k: sorted(v) for k, v in wanted.items()}},
+            "evidence_followup": {"parent_request_id": parent_request_id,
+                "supplement_ref": str(tools.store.path("research_evidence_supplements", parent_request_id).resolve())}}
+        if parent.get("evidence_input", {}).get("media_refs") == "selected_events":
+            domain["evidence_input"]["media_refs"] = "selected_events"
+        if parent.get("evidence_input", {}).get("sdk_projection") == "terminal_history_catalog_v2":
+            domain["evidence_input"]["sdk_projection"] = "terminal_history_catalog_v2"
+        followup = ResearchTools(tools.store, tools.job, tools.protocol, domain_policy=domain)
+        return self.prepare_request(followup, request_id=request_id, result_ids=list(wanted),
+            max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens)
 
     def apply_response(
         self, tools, response, *, evidence_level, cost_limit, synthetic=False,
@@ -1176,6 +1350,11 @@ class BoundedResearchAdapter(ResearchLLMAdapter):
                 raise ValueError("intervention outside human operator policy")
         else:
             raise ValueError("unsupported bounded decision")
+        evidence_supplement = None
+        if "evidence_requests" in response:
+            if response["evidence_requests"] and decision != "defer":
+                raise ValueError("supplemental evidence requests require a deferral")
+            evidence_supplement = tools.consume_evidence_requests(request_id, response["evidence_requests"])
         opportunity_id = request_id + "-opportunity"
         opportunity = tools.discover_opportunity(
             opportunity_id,
@@ -1204,17 +1383,23 @@ class BoundedResearchAdapter(ResearchLLMAdapter):
             gaps = list(response["missing_evidence"])
             if admission is not None:
                 gaps.extend(item for item in admission["missing_evidence"] if item not in gaps)
-            return tools.defer(
+            deferred = tools.defer(
                 request_id + "-defer",
                 opportunity_id=opportunity_id,
                 reason=response["reason"],
                 missing_evidence=gaps,
             )
+            if evidence_supplement and evidence_supplement["reads"]:
+                return {**deferred, "next_action": "prepare_evidence_followup",
+                    "evidence_supplement_ref": str(tools.store.path("research_evidence_supplements", request_id).resolve())}
+            return deferred
         if decision == "propose_goal":
             return tools._owned("opportunities", opportunity_id)
         if tools.store.get("rho", tools.base.rho_ref)["rhoC"].get("type") != "fixed":
             relation_admission = tools.research_relation_admission(response["result_ids"],
-                states=development_states, legal_repairs=list(intervention))
+                states=development_states, legal_repairs=list(intervention), selection_id=request_id,
+                technical_admitted=request["domain_policy"].get("relation_admission", {}).get("technical_admitted") is True,
+                data_admitted=request["domain_policy"].get("relation_admission", {}).get("data_admitted") is True)
             if relation_admission["action"] == "defer":
                 return tools.defer(request_id + "-relation-defer", opportunity_id=opportunity_id,
                     reason="rhoC defers this prepared development action",

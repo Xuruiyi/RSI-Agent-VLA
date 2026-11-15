@@ -22,10 +22,18 @@ def fixed_route(rho_snapshot, requested_worker, allowed_workers, *, state=None,
 
 
 def fixed_research_step(rho_snapshot, job, *, evidence_available, legal_repairs=(),
-                        inspected=False, experiment_permitted=False, state=None):
+                        inspected=False, experiment_permitted=False, state=None,
+                        context=None, technical_admitted=False, data_admitted=False,
+                        exploration_used=0):
     """Inspect then use observed screening yield, under the unchanged job budget."""
-    from .relation_learning import SCHEMA
+    from .relation_learning import SCHEMA, CONTEXT_SCHEMA, contextual_research_decision
     policy = rho_snapshot["rhoC"]
+    if policy.get("type") == CONTEXT_SCHEMA:
+        return contextual_research_decision(policy, job, context=context,
+            evidence_available=evidence_available, inspected=inspected,
+            experiment_permitted=experiment_permitted, legal_repairs=legal_repairs,
+            technical_admitted=technical_admitted, data_admitted=data_admitted,
+            exploration_used=exploration_used)["action"]
     if policy.get("type") != SCHEMA and (policy.get("type") != "fixed" or
             policy.get("order") != ["inspect", "bounded_experiment", "defer"]):
         raise ValueError("unsupported rhoC policy")

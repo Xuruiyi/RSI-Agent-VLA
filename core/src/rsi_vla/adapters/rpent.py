@@ -37,6 +37,35 @@ def execution_health(events, identity, *, source_ref=None):
                 recovery_criterion='not_defined_for_execution_faults' if issues else None)
 
 
+def _frozen_budget_receipt(result):
+    """Read the identity-bound journal marker for a non-Planner budget stop."""
+    episode = result.get('episode_execution') or {}
+    if episode.get('arm') not in {'D', 'S', 'R'} or episode.get('status') != 'budget_exhausted':
+        return False
+    try:
+        marker = json.loads(Path(episode['budget_stop_ref']).read_text())
+        identity = {key: result[key] for key in ('run_id', 'episode_id', 'bundle_id', 'protocol_id')}
+        limit, observed = marker.get('limit'), marker.get('observed')
+        numeric = type(limit) in (int, float) and type(observed) in (int, float)
+        requested = marker.get('requested_steps', 0)
+        exhausted = numeric and (observed >= limit or marker.get('reason') == 'environment_steps'
+            and type(requested) is int and observed + requested > limit)
+        runtime = result.get('runtime') or {}
+        service = result.get('environment_service') or {}
+        producer = marker.get('producer_events_ref')
+        client_producer = bool(producer and producer == runtime.get('action_events_ref'))
+        environment_producer = bool(producer and marker.get('reason') == 'environment_steps'
+            and producer == runtime.get('environment_service', {}).get('action_events_ref')
+            and service.get('environment_steps_reserved')
+            == service.get('environment_steps_confirmed') == observed)
+        return bool(all(marker.get('identity', {}).get(k) == v for k, v in identity.items()) and exhausted
+            and marker.get('reason') in {'tool_calls', 'environment_steps', 'max_turns', 'model_requests'}
+            and marker.get('stop_after_inflight') is True
+            and (client_producer or environment_producer))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def closed_native_failure(result):
     """Verify the service evidence behind a normally closed negative attempt."""
     service = result.get('environment_service') or {}
@@ -48,7 +77,7 @@ def closed_native_failure(result):
             and service.get('environment_steps_unknown') == 0 and service.get('last_native_success') is False
             and source.get('native_success') and (source.get('runner_completion') or
                  result.get('verified_budget_exhaustion') is True and source.get('budget_completion')
-                 and source.get('planner_budget_stop'))
+                 and (source.get('planner_budget_stop') or _frozen_budget_receipt(result)))
             and source.get('last_feedback_sequence') == service.get('last_feedback_sequence')
             and all(service.get('identity', {}).get(key) == result.get(key)
                     for key in ('run_id', 'episode_id', 'bundle_id', 'protocol_id')))
@@ -67,6 +96,18 @@ def read_trajectory(states_path, transcript_path, *, bundle_id, run_id, episode_
     if runtime_identity is not None and any(runtime_identity.get(key) != value
                                              for key, value in expected_identity.items()):
         raise ValueError("transcript runtime identity mismatch")
+    arm = None
+    context_path = states_path.parent / "runtime_context.json"
+    if context_path.is_file():
+        context = json.loads(context_path.read_text())
+        if any(context.get(key) != value for key, value in expected_identity.items()):
+            raise ValueError("execution arm context identity mismatch")
+        arm = context.get("execution_arm", {}).get("arm")
+    selector = "frozen_program" if arm in {"D", "S", "R"} else "planner"
+    retention = None
+    if (states_path.parent / "artifact_retention.json").exists():
+        from ..artifact_retention import policy_unavailable_media
+        retention = policy_unavailable_media(states_path.parent)
     steps = states.get("steps", []) if isinstance(states, dict) else states
     for sequence, step in enumerate(steps):
         command = step.get("command")
@@ -86,9 +127,12 @@ def read_trajectory(states_path, transcript_path, *, bundle_id, run_id, episode_
             tool_status="failed" if result.get("error") else "completed" if "result" in step else "unknown",
             flags={"terminated": step.get("terminated"), "truncated": step.get("truncated"),
                    "action_source": action_origin(action),
-                   "call_initiator": "planner" if command else "unknown",
-                   "instruction_and_allowance_selector": "planner" if action == "vla_execute" else "unknown",
-                   "task_selector": "planner" if action == "vla_execute" else "unknown",
+                   "call_initiator": selector if command else "unknown",
+                   "instruction_and_allowance_selector": selector if action == "vla_execute" else "unknown",
+                   "task_selector": ("original_task" if arm == "D" else selector) if action == "vla_execute" else "unknown",
+                   "execution_arm": arm,
+                   **({"artifact_retention": {**retention, "paths": [str(path) for path in media_paths
+                         if str(path) in retention["paths"]]}} if retention else {}),
                    "heuristic_pick_success": result.get("success") if action == "pi0_pick" else None},
             missing=["raw_action_proposal", "sent_action", "controller_applied_action",
                      "execution_mask", "capture_send_feedback_clocks", "independent_task_outcome"]

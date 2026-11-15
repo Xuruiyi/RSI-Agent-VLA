@@ -57,9 +57,14 @@ class AutoloopBridge:
             if result.get("error"):
                 raise RuntimeError(result["error"])
             return result["result"]
+        consumer = self.config.get("core_consumer", "protocol10")
+        scripts = {"protocol10": "run_protocol10.py",
+                   "task_continuation": "run_task_continuation.py"}
+        if consumer not in scripts:
+            raise ValueError("unsupported registered core consumer")
         argv = [
             sys.executable,
-            str(Path(__file__).resolve().parents[3] / "scripts/run_protocol10.py"),
+            str(Path(__file__).resolve().parents[3] / "scripts" / scripts[consumer]),
             command,
             "--root",
             self.config["core_root"],

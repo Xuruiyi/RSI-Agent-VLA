@@ -183,8 +183,34 @@ def prepare_runtime(root, artifacts, *, protocol_path, run_id, bundle_id, task_k
         context['runtime_rules_ref'] = str(Path(bundle['phi_ref']).resolve())
         if rules.get('planner_task_hint'):
             context['planner_task_hint'] = rules['planner_task_hint']
+    execution_arm = None
+    if profile.get('execution_arm') is not None or 'execution_arm_by_task' in profile:
+        from robots.libero.execution_arms import select_execution_arm
+        execution_arm = select_execution_arm(profile, task_key)
+    if execution_arm is not None:
+        arm = execution_arm['arm']
+        frozen = arm in {'D', 'S', 'R'}
+        expected_backend = 'flash' if frozen else 'codex'
+        if profile['planner']['backend'] != expected_backend:
+            raise ValueError('execution arm does not match its actual planner consumer')
+        if frozen and profile.get('relation_routes'):
+            raise ValueError('frozen execution arms require no rhoB routing')
+        if frozen:
+            # The Flash robot hook consumes the frozen program directly. Its
+            # local memory manager does not fetch or run a historical Flash plan.
+            command[command.index('--memory-profile') + 1] = 'local'
+            for option in ('--memory-repo', '--memory-version'):
+                index = command.index(option)
+                del command[index:index + 2]
+        context['execution_arm'] = execution_arm
+        context['execution_information'] = dict(
+            control='latest native VLA images and state',
+            program='public EEF/gripper state' if arm in {'S', 'R'} else None,
+            private_evaluation_truth=False,
+            online_planner=not frozen,
+            model_requests_expected=0 if frozen else None)
     task_input = profile.get('task_inputs', {}).get(task_key, profile.get('task_input'))
-    if task_input:
+    if task_input and context.get('execution_arm', {}).get('arm') not in {'D', 'S', 'R'}:
         if task_input['task_scope'] != {'suite':task['suite'], 'task':task['task_id']}:
             raise ValueError('startup input not defined for selected task')
         context['task_input'] = task_input
@@ -296,6 +322,15 @@ def prepare_runtime(root, artifacts, *, protocol_path, run_id, bundle_id, task_k
         blockers.append('authoritative profile/protocol dynamic authorization remains false')
     if profile['planner']['backend'] == 'codex' and profile.get('token_policy') != 'observed_only':
         blockers.append('Codex SDK has no verified per-request input/output token admission bound')
+    if profile.get('common_execution') is not None:
+        from robots.libero.execution_arms import validate_common_execution
+        context['common_execution'] = validate_common_execution(
+            profile['common_execution'],
+            action_prefix_steps=profile['control'].get(
+                'executed_prefix_steps', profile['control']['action_chunk']),
+            environment_steps=context['limits']['environment_steps'],
+            tool_calls=context['limits']['tool_calls'],
+        )
     environment=dict(PI05_CHECKPOINT_PATH=str(checkpoint), PI05_NORM_STATS_PATH=str(normalization),
                      RPENT_REPO_ROOT=str(root/'RPent'),RPENT_RLINF_ROOT='',RLINF_REPO_PATH='',
                      HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',CUDA_VISIBLE_DEVICES=str(cuda_device))
@@ -352,6 +387,7 @@ def execute_runtime(plan):
                'RPent/robots/libero/runtime_evidence.py','RPent/robots/libero/toolkit.py',
                'RPent/robots/libero/env_client.py','RPent/robots/libero/env_server.py','RPent/robots/libero/action_spec.py',
                'RPent/robots/libero/skill_routing.py','RPent/robots/libero/drawer_observation.py',
+               'RPent/robots/libero/execution_arms.py',
                'RPent/robots/libero/tools.py','RPent/rpent/robots/components/pi05_vla_server.py',
                'RPent/rpent/flywheel/episode.py','RPent/robots/libero/flywheel.py','core/src/rsi_vla/collection.py')
         from .read_text_audit import READ_SOURCES

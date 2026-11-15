@@ -87,6 +87,7 @@ def finalize_run(context: RunFinalizationContext) -> Path:
     # Its normal return closes the attempt, while native success still comes
     # solely from the matching environment worker's confirmed last step.
     runtime = metrics.get("runtime") or {}
+    episode = metrics.get("episode_execution") or {}
     health = execution_health(runtime) if runtime else None
     segments = metrics.get("execution_segments", [])
     if segments:
@@ -105,9 +106,27 @@ def finalize_run(context: RunFinalizationContext) -> Path:
                 health["recovery_criterion"] = "not_defined_for_execution_faults"
             elif segment.get("stop_reason") in {"cancelled", "budget"}:
                 health["stops"].append(segment)
-    technical = bool(context.agent_error or health and health["status"] != "clear")
+    if episode.get("status") == "technical_error":
+        health = health or {
+            "status": "unresolved",
+            "issues": [],
+            "stops": [],
+            "events_ref": runtime.get("action_events_ref"),
+            "missing": [],
+        }
+        health["status"] = "unresolved"
+        health["issues"].append(episode)
+        health["recovery_criterion"] = "not_defined_for_execution_faults"
+    technical = bool(
+        context.agent_error
+        or health
+        and health["status"] != "clear"
+        or episode.get("status") == "technical_error"
+    )
     segment_cancelled = bool(
-        health and any(e.get("stop_reason") == "cancelled" for e in health["stops"])
+        episode.get("status") == "cancelled"
+        or health
+        and any(e.get("stop_reason") == "cancelled" for e in health["stops"])
     )
     identity = runtime.get("identity")
     service_ref = runtime.get("environment_service", {}).get("costs_ref")
@@ -219,12 +238,62 @@ def finalize_run(context: RunFinalizationContext) -> Path:
             or local_budget_failure
         )
     )
+    # Deterministic consumers have no Planner receipt. Their persisted budget
+    # marker is still produced by the same journal before the rejected action.
+    if episode.get("status") == "budget_exhausted" and identity:
+        try:
+            marker = read_budget_stop(episode["budget_stop_ref"], identity)
+            limit, observed = (
+                (marker or {}).get("limit"),
+                (marker or {}).get("observed"),
+            )
+            numeric = type(limit) in (int, float) and type(observed) in (int, float)
+            requested = (marker or {}).get("requested_steps", 0)
+            exhausted = numeric and (
+                observed >= limit
+                or marker.get("reason") == "environment_steps"
+                and type(requested) is int
+                and observed + requested > limit
+            )
+            producer = (marker or {}).get("producer_events_ref")
+            client_producer = bool(
+                producer and producer == runtime.get("action_events_ref")
+            )
+            # The native owner counts reset settling and policy actions in the
+            # same physical allowance. Its first-cause marker may precede the
+            # last admitted action's feedback, which service closure drains.
+            environment_producer = bool(
+                producer
+                and marker.get("reason") == "environment_steps"
+                and producer
+                == runtime.get("environment_service", {}).get("action_events_ref")
+                and service
+                and service.get("environment_steps_reserved")
+                == service.get("environment_steps_confirmed")
+                == observed
+            )
+            budget_closed = bool(
+                marker
+                and marker.get("stop_after_inflight") is True
+                and exhausted
+                and (client_producer or environment_producer)
+                and service_confirmed
+                and service["last_native_success"] is False
+                and not technical
+                and not segment_cancelled
+                and not finish.get("operator_aborted")
+                and not finish.get("interrupted")
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            service_missing.append("unverified_execution_arm_budget_stop")
     normal_closed = bool(
         not technical
         and not segment_cancelled
         and not finish.get("operator_aborted")
         and not finish.get("interrupted")
         and service_confirmed
+        and episode.get("status")
+        not in {"unknown", "technical_error", "cancelled", "budget_exhausted"}
         and context.stats.get("planner_turn_status")
         not in {"interrupted", "cancelled", "failed"}
         and (
@@ -314,6 +383,8 @@ def finalize_run(context: RunFinalizationContext) -> Path:
             if key in context.stats
         },
         "execution_health": health,
+        "execution_arm": metrics.get("execution_arm"),
+        "episode_execution": metrics.get("episode_execution"),
         "elapsed_s": round(context.elapsed_s, 1),
         "planner": {
             "backend": context.planner,

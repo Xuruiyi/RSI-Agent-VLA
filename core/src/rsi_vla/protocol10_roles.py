@@ -195,6 +195,11 @@ def run_operator(configuration, argv, *, boundary_factory=None):
                                         )
                         commit(proposal, configuration["phase_ref"])
                         result = {"committed": True}
+                    elif request["action"] == "task_admission":
+                        if set(request) != {"action", "operation_id"}:
+                            raise ValueError("resource probe accepts only an operation identity")
+                        from .task_continuation import probe_admission
+                        result = probe_admission(configuration, request["operation_id"])
                     elif request["action"] == "role":
                         task = request["task"]
                         result = run_role(

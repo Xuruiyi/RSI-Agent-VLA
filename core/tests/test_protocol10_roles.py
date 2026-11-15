@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import test_protocol10_integration as integration
 from rsi_vla.protocol10_backend import Protocol10Backend, read
@@ -163,7 +164,6 @@ class RoleBusinessTests(unittest.TestCase):
         evidence = os.environ.get("RSI_ROLE_EVIDENCE_ROOT")
         if evidence:
             import tempfile
-            from unittest.mock import patch
 
             make_temp = tempfile.TemporaryDirectory
 
@@ -202,17 +202,28 @@ class RoleBusinessTests(unittest.TestCase):
         atomic_json(config_ref, f.config)
         # Create immutable registration before isolated readers consume it.
         Protocol10Backend(root / "operator/protocol10", f.config)
-        status = run_operator(
-            f.config,
+        # unittest discovery changes only this process's sys.path. The isolated
+        # driver and role factories need the original checkout in PYTHONPATH.
+        tests_root = Path(__file__).resolve().parent
+        pythonpath = os.pathsep.join(
             [
-                sys.executable,
-                "-m",
-                "test_protocol10_roles",
-                "--driver",
-                str(config_ref),
-            ],
-            boundary_factory="test_protocol10_roles:boundary_factory",
+                str(tests_root),
+                str(tests_root.parent / "src"),
+                *([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else []),
+            ]
         )
+        with patch.dict(os.environ, {"PYTHONPATH": pythonpath}):
+            status = run_operator(
+                f.config,
+                [
+                    sys.executable,
+                    "-m",
+                    "test_protocol10_roles",
+                    "--driver",
+                    str(config_ref),
+                ],
+                boundary_factory="test_protocol10_roles:boundary_factory",
+            )
         self.assertEqual(status, 0)
         result = read(root / "operator/driver-result.json")
         self.assertEqual(result["phase"]["used"]["simulation_episodes"], 18)

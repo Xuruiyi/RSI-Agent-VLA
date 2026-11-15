@@ -10,7 +10,8 @@ from .evidence import EventLedger
 IMPORT_VERSION = "rpent-development-v2-action-origin"
 
 
-def import_development(store, protocol, run_dir, *, result_id, revision_id=None, audit_path=None):
+def import_development(store, protocol, run_dir, *, result_id, revision_id=None, audit_path=None,
+                       evaluation_ref=None, evaluation_store_ref=None):
     """Use a versioned store for changed derivations; equal replay is idempotent."""
     root = Path(run_dir).resolve()
 
@@ -18,7 +19,18 @@ def import_development(store, protocol, run_dir, *, result_id, revision_id=None,
         return json.loads((root / name).read_text())
 
     context = read("runtime_context.json")
-    result = read("independent_result.json")
+    result_path, cost_path = root / "independent_result.json", root / "cost_breakdown.json"
+    if evaluation_ref is not None:
+        if evaluation_store_ref is None:
+            raise ValueError("versioned development import requires its trusted evaluation store")
+        from .development_reparse import resolve_development_evaluation
+        revision = resolve_development_evaluation(evaluation_ref, root, evaluation_store_ref=evaluation_store_ref, protocol=protocol)
+        result_path, cost_path = (Path(revision["outputs"][key]) for key in ("independent_result_ref", "cost_breakdown_ref"))
+        if audit_path is not None and Path(audit_path).resolve() != Path(revision["outputs"]["audit_ref"]):
+            raise ValueError("development audit differs from the registered evaluation revision")
+        audit_path = revision["outputs"]["audit_ref"]
+        revision_id = revision["revision_id"]
+    result = json.loads(result_path.read_text())
     if context.get("information_scope", "development") != "development":
         raise ValueError("only development execution may enter research input")
     identity = {
@@ -54,17 +66,21 @@ def import_development(store, protocol, run_dir, *, result_id, revision_id=None,
         run_id=identity["run_id"],
         episode_id=identity["episode_id"],
         protocol_id=identity["protocol_id"],
-        independent_result_path=root / "independent_result.json",
+        independent_result_path=result_path,
         action_events_path=root / "action_events.jsonl",
     )
-    cost = read("cost_breakdown.json")
+    cost = json.loads(cost_path.read_text())
     if cost["identity"] != identity:
         raise ValueError("cost identity mismatch")
     # Preserve null/missing cost detail in L0 references; use the existing measured cost vector.
     audit = json.loads(Path(audit_path).read_text()) if audit_path else read("independent-audit.json")
     if audit["identity"] != identity:
         raise ValueError("audit identity mismatch")
+    if evaluation_ref and audit.get("passed") is not True:
+        raise ValueError("revised development import requires its passed independent audit")
     outcome = events[-1].outcome
+    if result.get("verified_budget_exhaustion") is True and outcome != "failure":
+        raise ValueError("verified budget exhaustion establishes failure only")
     invalid = (
         result.get("validity") == "technical_invalid"
         or events[-1].flags["technical_invalid"]
@@ -78,7 +94,8 @@ def import_development(store, protocol, run_dir, *, result_id, revision_id=None,
         IMPORT_VERSION,
     )
     refs = [
-        str(Path(audit_path).resolve() if name == "independent-audit.json" and audit_path else root / name)
+        str(Path(audit_path).resolve() if name == "independent-audit.json" and audit_path else
+            result_path if name == "independent_result.json" else cost_path if name == "cost_breakdown.json" else root / name)
         for name in (
             "runtime_context.json",
             "independent_result.json",
@@ -93,6 +110,9 @@ def import_development(store, protocol, run_dir, *, result_id, revision_id=None,
     refs.append(str(transcripts[0]))
     if audit_path:
         refs.append(str(audit_path))
+    if evaluation_ref:
+        refs.append(str(Path(evaluation_ref).resolve()))
+        refs.extend(revision["original_refs"].values())
     if (root / "dataset_manifest.json").exists():
         refs.append(str(root / "dataset_manifest.json"))
     view_ref = str(store.path("evidence_views", view_id).resolve())
@@ -125,8 +145,9 @@ def import_development(store, protocol, run_dir, *, result_id, revision_id=None,
                 seed=task["seed"],
                 outcome=outcome,
                 validity="invalid" if invalid else "valid",
-                evidence_ref=str(root / "independent_result.json"),
-                outcome_source=events[-1].outcome_source and "native_benchmark",
+                evidence_ref=str(result_path),
+                outcome_source=("verified_budget_exhaustion" if result.get("verified_budget_exhaustion") is True
+                                else "native_benchmark") if events[-1].outcome_source else None,
             )
         ],
         notes=[

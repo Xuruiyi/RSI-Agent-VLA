@@ -91,6 +91,27 @@ it does not prohibit full-task instructions on the bounded VLA path. Older hybri
 guides describe the fine-grained path; their grasp-only division is not global here.
 """
 
+OPERATIONS_COMMON = """Use structured tools within one continuous episode. The runner owns services,
+results and cleanup. Do not reset, restart, install, download or access devices.
+Inspect step 0 with view_env_state; its task language is authoritative. Only
+vla_execute may move the robot. Each prediction uses the latest native images
+and proprioception and executes five actions; a logical segment may contain
+1-24 predictions. Every prediction shares the same physical and recording limits.
+Choose task or subgoal instructions, inspect segment feedback and images, then
+continue, change instruction, or stop within the original episode allowance.
+Use public images and proprioception. Do not read BDDL, evaluator results, object
+poses, world maps, sealed data, or historical absolute coordinates. No state
+heuristic proves holding or native task success. A missed grasp may justify a
+shorter grasp subgoal; a full task instruction remains available for continuation.
+State a brief reason for each intervention in the transcript. Native success
+closes admission automatically. Budget exhaustion drains admitted work and saves
+the result; finish is a voluntary stop. Never issue a duplicate completion audit.
+Tool feedback reports remaining allowance. Unknown state stays unknown. At most
+one local recovery shares the original limits; no fresh episode or extra budget.
+Read external memory only for a concrete unresolved operation. Current images,
+task language and exposed tool schemas take priority over historical recipes.
+"""
+
 # Verbatim, condition-preserving excerpts. Full upstream files remain unchanged.
 V2_EXCERPTS = {
     GLOBAL_MEMORY[0]: (
@@ -165,8 +186,9 @@ def build_task_input(
         str(Path(__file__).parent / "guides" / name)
         for name in ("strict_hybrid_guide.md", "pro_hybrid_guide.md")
     ]
+    common = context.get("common_execution") is not None
     system = (
-        OPERATIONS_V2 if v2 else OPERATIONS
+        OPERATIONS_COMMON if common else OPERATIONS_V2 if v2 else OPERATIONS
     ) + "\nExisting tool schemas define arguments and action limits.\n"
     user = (
         f"Task: {options['task_language']}\n"
@@ -181,17 +203,40 @@ def build_task_input(
         + "Skills: pi0_pick (grasp), move_to/move_pose (motion), release, set_gripper, "
         "rotate_wrist/rotate_pitch, pi0_doubled (contact); use their exposed schemas."
     )
+    if common:
+        user = (
+            f"Task: {options['task_language']}\n"
+            f"suite={task['suite']}, task={task['task']}, seed={task['seed']}\n"
+            "Confirm task_language and initial images with view_env_state(step=0).\n"
+            + "\n".join(f"Source: {item['ref']}\n{item['text']}" for item in sources)
+            + f"\nMissing matching sources: {missing}\n"
+            + f"On-demand memory index: {root / 'MEMORY.md'}\n"
+            + "Motion tool: vla_execute(instruction, max_chunks). "
+            "Use exposed observation tools to inspect current evidence."
+        )
     task_hint = context.get("planner_task_hint", "")
     if task_hint:
-        user += "\n\nAdditional Planner instruction from the runtime rule:\n" + task_hint
+        user += (
+            "\n\nAdditional Planner instruction from the runtime rule:\n" + task_hint
+        )
     skill_start = context.get("relation_skill_start")
     if skill_start:
-        argument = "prompt" if skill_start["tool"] in {"pi0_pick", "pi0_doubled"} else "instruction"
+        argument = (
+            "prompt"
+            if skill_start["tool"] in {"pi0_pick", "pi0_doubled"}
+            else "instruction"
+        )
         user += (
             "\n\nRegistered same-goal skill comparison: after the initial observation, "
-            "make one registered subgoal call using " + skill_start["tool"] + " with "
-            + json.dumps({argument: skill_start["instruction"],
-                          "max_chunks": skill_start["max_chunks"]})
+            "make one registered subgoal call using "
+            + skill_start["tool"]
+            + " with "
+            + json.dumps(
+                {
+                    argument: skill_start["instruction"],
+                    "max_chunks": skill_start["max_chunks"],
+                }
+            )
             + ". This consumes the existing allowance. Then inspect feedback and "
             "continue the task, recover or stop under the original rules. "
             "The skill call does not establish holding or native task success."

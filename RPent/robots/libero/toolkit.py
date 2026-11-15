@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 from robots.libero import tools as libero_tools
 from rpent.dashboard.events import DashboardEventSink
 from rpent.session import EnvState
-from rpent.session.runtime import RuntimeJournal
+from rpent.session.runtime import RuntimeBudgetExceeded, RuntimeJournal
 from rpent.tools import ToolResult, iter_tools
 from rpent.tools.base import tool
 from rpent.tools.direct_action import direct_action_tool
@@ -47,6 +47,8 @@ class LiberoToolkit(Toolkit):
     """Toolkit for the LIBERO robot."""
 
     runtime_journal: RuntimeJournal | None = None
+    _common_execution: dict[str, Any] | None = None
+    _common_prediction_state: ToolResult | None = None
 
     def __init__(
         self,
@@ -116,6 +118,21 @@ class LiberoToolkit(Toolkit):
     # Registration
     # ------------------------------------------------------------------
     def _register_libero_tools(self) -> None:
+        from robots.libero.execution_arms import validate_common_execution
+
+        journal = self.runtime_journal
+        common = journal.context.get("common_execution") if journal else None
+        self._common_execution = (
+            validate_common_execution(
+                common,
+                action_prefix_steps=journal.chunk_steps or 5,
+                environment_steps=journal.context["limits"]["environment_steps"],
+                tool_calls=journal.context["limits"]["tool_calls"],
+            )
+            if common is not None
+            else None
+        )
+        self._common_prediction_state = None
         for definition in iter_tools(libero_tools):
             if definition.name == "view_env_state" and self.runtime_journal is not None:
                 detail = self.runtime_journal.context.get(
@@ -134,6 +151,11 @@ class LiberoToolkit(Toolkit):
                     definition.with_handler(partial(definition, state=self._state))
                 )
         for definition in iter_tools(self._primitives):
+            if self._common_execution and definition.name not in {
+                "vla_execute",
+                "segment",
+            }:
+                continue
             excluded = (
                 {"pi0_pick", "pi0_doubled", "vla_execute"}
                 if self._policy_kind == "wam"
@@ -167,6 +189,8 @@ class LiberoToolkit(Toolkit):
     def _execute_primitive(
         self, name: str, handler: Callable[..., ToolResult], **kwargs: Any
     ) -> ToolResult:
+        if self._common_execution and name != "vla_execute":
+            raise ValueError("common execution permits only vla_execute motion")
         env = self._primitives.env
         if self._policy_kind == "wam" and (env.terminated or env.truncated):
             status = "success" if env.terminated else "failure"
@@ -180,6 +204,8 @@ class LiberoToolkit(Toolkit):
         if route is None:
             self._primitives.begin_primitive(name)
             try:
+                if self._common_execution and name == "vla_execute":
+                    return self._execute_common_vla_segment(handler, **kwargs)
                 return handler(**kwargs)
             finally:
                 self._primitives.end_primitive()
@@ -226,6 +252,105 @@ class LiberoToolkit(Toolkit):
                      execution_error=result.data.get("error"), environment_observation=after)
         result.data["relation_route"] = binding
         return result
+
+    def _execute_common_vla_segment(
+        self, handler: Callable[..., ToolResult], *, instruction: str, max_chunks: int
+    ) -> ToolResult:
+        """Persist one native prediction at a time for every execution arm."""
+        journal = self.runtime_journal
+        logical_call = journal.emit(
+            "common_execution_call_start",
+            instruction=instruction,
+            max_chunks=max_chunks,
+            common_execution=self._common_execution,
+        )
+        totals = dict.fromkeys(
+            (
+                "predictions_started",
+                "predictions_completed",
+                "executed_steps",
+                "unknown_steps",
+            ),
+            0,
+        )
+        segments = []
+        admission_error = None
+        for index in range(max_chunks):
+            if self._primitives.env.terminated or self._primitives.env.truncated:
+                break
+            if index:
+                internal_call = journal.sequence
+                try:
+                    journal.admit_tool("vla_execute")
+                except RuntimeBudgetExceeded as exc:
+                    admission_error = str(exc)
+                    break
+                journal.emit(
+                    "common_internal_tool_admission",
+                    logical_call_sequence=logical_call,
+                    tool_call_sequence=internal_call,
+                )
+            started = time.monotonic()
+            segment = None
+            try:
+                segment = handler(instruction=instruction, max_chunks=1).data
+                segments.append(segment)
+                for key in totals:
+                    totals[key] += segment.get(key, 0)
+                if segment.get("predictions_started", 0):
+                    self._common_prediction_state = self._capture_env_state(
+                        command={
+                            "action": "vla_execute",
+                            "instruction": instruction,
+                            "max_chunks": 1,
+                        },
+                        result=segment,
+                        elapsed_s=time.monotonic() - started,
+                    )
+            finally:
+                if index:
+                    journal.emit(
+                        "tool_end",
+                        tool="vla_execute",
+                        logical_call_sequence=logical_call,
+                        tool_call_sequence=internal_call,
+                        status="failed"
+                        if segment is None or segment.get("error")
+                        else "completed",
+                        elapsed_seconds=time.monotonic() - started,
+                    )
+            journal.emit(
+                "common_prediction_call",
+                logical_call_sequence=logical_call,
+                prediction_index=index,
+                segment_sequence=segment.get("segment_sequence"),
+                tool_allowance_source="outer_call"
+                if index == 0
+                else "internal_prediction",
+                recording_cadence="prediction",
+            )
+            if segment.get("stop_reason") != "chunk_allowance":
+                break
+        if not segments:
+            return handler(instruction=instruction, max_chunks=1)
+        data = {
+            **segments[-1],
+            **totals,
+            "max_chunks": max_chunks,
+            "chunks_used": totals["predictions_completed"],
+            "common_execution_call_sequence": logical_call,
+            "common_execution_segments": segments,
+        }
+        if admission_error is not None:
+            data.update(
+                stop_reason="budget",
+                segment_status="budget",
+                diagnostic=admission_error,
+            )
+        journal.emit(
+            "common_execution_call_end", logical_call_sequence=logical_call, **data
+        )
+        return ToolResult(data=data)
 
     def _wam_finish(self, inner: Any, **kwargs: Any) -> ToolResult:
         """Require native task success before accepting a success claim."""
@@ -289,6 +414,27 @@ class LiberoToolkit(Toolkit):
         result: dict[str, Any],
         elapsed_s: float,
     ) -> ToolResult:
+        if (
+            command.get("action") == "vla_execute"
+            and self._common_prediction_state is not None
+        ):
+            saved = self._common_prediction_state
+            out = ToolResult(data=dict(saved.data), images=list(saved.images))
+            out.data["execution_segment"] = result
+            out.data["agent_elapsed_s"] = elapsed_s
+            return out
+        return self._capture_env_state(
+            command=command, result=result, elapsed_s=elapsed_s
+        )
+
+    def _capture_env_state(
+        self,
+        *,
+        command: dict[str, Any],
+        result: dict[str, Any],
+        elapsed_s: float,
+    ) -> ToolResult:
+        """Save the common observation without adding another action boundary."""
         media_started = time.monotonic()
         frame_start = self._action_frame_cursor
         self._action_frame_cursor = self._primitives.recorded_frame_count()
@@ -443,6 +589,12 @@ class LiberoToolkit(Toolkit):
         return {
             "terminated": getattr(env, "terminated", None),
             "truncated": getattr(env, "truncated", None),
+            "episode_execution": getattr(self, "_episode_execution", None),
+            "execution_arm": (
+                self.runtime_journal.context.get("execution_arm")
+                if self.runtime_journal
+                else None
+            ),
             "mode": self._mode,
             "attempt": self._attempt,
             "tool_successes": tool_successes,

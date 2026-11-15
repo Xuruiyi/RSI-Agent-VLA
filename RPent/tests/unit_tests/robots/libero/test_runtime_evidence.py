@@ -111,7 +111,10 @@ def test_rule_consumes_prefix_and_preserves_full_proposal_and_feedback(tmp_path)
 
     primitives = LiberoPrimitives(
         env=SimpleNamespace(
-            chunk_step=chunk, rsi_chunk_step=chunk, return_all_frames=False
+            chunk_step=chunk,
+            rsi_chunk_step=chunk,
+            return_all_frames=False,
+            terminated=False,
         ),
         model=SimpleNamespace(
             predict=lambda *_args, **_kwargs: np.arange(21).reshape(3, 7)

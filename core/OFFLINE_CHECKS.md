@@ -731,3 +731,16 @@ scope实际Runtime19、project上游144（Planner medium142、Research high2）�
 新14 private drawer getter/reviewer/finite contact route已通过core43和RPent有效48项检查；原计量context污染的4个Env选择失败在清子进程环境后9项通过，不改product/断言。原失败回执保留，勿将重测加总为独立样本。真实首控制臂因人工暂停终止：159.688408秒、4请求/3完整响应、150确认环境步，native unknown，工具下界2/上界3，normal finalizer未完成。外层supervisor和实际进程/GPU审计确认清理，锁可取得；不是有效failure或技术恢复，不自动重开。第三候选/新Research均尚未产生。
 
 暂停回执、实际费用、原始证据和接续约束见artifacts/5a-completion-20261113-v1/current-pause.json及continuation-live-20261114/candidate03-pause-handoff.md。scope-v6与原截止保持；5B只读准备、真实batch/训练未准入。后续等待用户指令，不自动继续任何动态。
+
+
+### §33 framework15 近期框架消费者与有界真实集成（2026-11-15）
+
+当前状态由[项目04](../项目文档/04_实施路线与待决事项.md#framework15近期框架优化实施中2026-11-15)维护；实现入口见[core README](README.md#新任务的实际执行与研究消费者)。本条保存验证依据，完整命令、原失败和定点复验见[validation/summary](../artifacts/framework15-20261115/validation/summary.json)，原始模型/仿真及资源见[delivery](../artifacts/framework15-20261115/delivery.json)。
+
+- core完整离线命令为 PYTHONPATH=core/src:RPent PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES= RPent/.venv/bin/python -m unittest discover -s core/tests -v。宿主环境原663项出现6个失败：旧φ算子fixture2项、旧ExperimentResult fixture2项、namespace子进程导入路径1项、宿主清理deadline1项。前五项补齐真实fixture契约并保留断言，分别定点2/2/1项通过；cleanup修复在原1.5秒断言下4项通过。另新增实际反馈消费者回归1项通过。先前通过结果按前提复用，没有重复整个套件。
+- RPent的LIBERO、session、planner、tools、robots调用方扩大检查原956通过/3失败/1跳过；补齐既有Env.terminated与RuntimeJournal fixture后6个受影响参数案例通过，最终959个唯一案例有有效通过证据、1跳过。未放宽断言。缺pytest-timeout仅产生配置/标记警告。
+- 新D/S/R程序、A接口、独立acceptance与来源检查覆盖成功、有效失败、技术错误、预算和unknown。无Planner的真实零转发gate允许没有请求流文件；未知/非零/未清理或错身份则拒绝且保留unknown。D原指令替换、SDK流及隐藏路由反例被拒绝。
+- 新续程复用真实Coordinator，覆盖两条后继、重复触发、丢失/延迟回执、重启核对、已知技术恢复、有效failure不补跑，以及人工暂停/取消/到期。固定宿主probe实际接入CLI；CPU故障注入验证资源恢复和中断等待累计。真实链走补证后defer终态，没有为凑分支追加运行。
+- 固定来源239帧真实CPU batch已通过，不是真实训练。θ×B实际prepare_runtime及run/episode/版本绑定回归通过，未知θ1阻断、fallback显式、生产Gate保留。初始有效ψ、事实分离和合法历史回放均有消费回执。
+- D/S/R/A的base_salad/seed0均原生success且独立通过。D原技术失败、唯一恢复、先前未提交控制失败及旧/新评价完整保留；S只在首技能达成原生终态，R实际发生公开状态分支。单槽、调用粒度/媒体节奏及随机性限制使本批不能支持E1净收益、训练收益、F2或H3。
+- 受影响RPent文件Ruff检查/格式、core新入口及语法检查、双Git diff --check、Markdown链接/接口静态核对通过。没有请求PR，未跑全仓修改式pre-commit；未改Sphinx页面或构建输入，不追加双语构建。Python矩阵未由本机3.11.13替代。

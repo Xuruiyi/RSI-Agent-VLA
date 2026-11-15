@@ -109,9 +109,34 @@ def _resolve_dashboard(args: argparse.Namespace) -> DashboardSpec:
 
 def _run_flash(toolkit, cell_tag: str, note) -> dict:
     """Run a recorded Flash plan for one cell. Imported late: it loads numpy."""
+    journal = toolkit.runtime_journal
+    execution = journal.context.get("execution_arm") if journal else None
+    if execution is not None:
+        from robots.libero.execution_arms import run_execution_arm
+
+        outcome = run_execution_arm(toolkit, execution).data
+        return {
+            "program": f"execution-arm-{outcome['arm']}",
+            "done": outcome["native_success"] is True,
+            "plan": len(outcome["segments"]),
+            "anchors": 0,
+            "episode_execution": outcome,
+        }
     from robots.libero.flash import run_flash
 
     return run_flash(toolkit, cell_tag, note)
+
+
+def _frozen_execution() -> bool:
+    """Identify the launcher's deterministic consumer before starting services."""
+    from rpent.session.runtime import runtime_context
+
+    execution = (runtime_context() or {}).get("execution_arm")
+    if execution is None:
+        return False
+    from robots.libero.execution_arms import validate_execution_arm
+
+    return validate_execution_arm(execution)["arm"] in {"D", "S", "R"}
 
 
 def get_robot_spec() -> RobotSpec:
@@ -301,7 +326,12 @@ def _parse_config(args: argparse.Namespace) -> RunConfig:
             raise ValueError(
                 "WAM requires --memory-profile local; no compatible HF corpus is configured"
             )
-    if planner == "flash":
+    frozen_execution = _frozen_execution()
+    if frozen_execution and planner != "flash":
+        raise ValueError(
+            "D/S/R execution arms require the deterministic flash entry point"
+        )
+    if planner == "flash" and not frozen_execution:
         if getattr(args, "explore", False):
             raise ValueError("Flash Mode is evaluation-only; remove --explore")
         if args.suite not in FLASH_SUITES:
@@ -339,7 +369,9 @@ def _parse_config(args: argparse.Namespace) -> RunConfig:
         else default_memory_dir
     )
     local_eval = not explore and memory_profile == "local"
-    if local_eval and wam is None:
+    if frozen_execution and memory_profile != "local":
+        raise ValueError("D/S/R execution arms require --memory-profile local")
+    if local_eval and wam is None and not frozen_execution:
         if planner == "flash":
             from robots.libero.memory import replay_directory
 
@@ -558,18 +590,22 @@ def flywheel_configuration(args: argparse.Namespace) -> dict[str, Any]:
         != Path(collection["root"]).resolve()
     ):
         raise ValueError("collection root differs from supervised runtime context")
-    return {
+    configuration = {
         **collection,
-        "identity": {
-            key: context.get(key)
-            for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
-        },
-        "information_scope": context.get("information_scope", "unspecified"),
         "root": args.flywheel_root or str(get_repo_root() / "datacollection"),
         "suite": args.suite,
         "task_id": args.task,
         "seed": args.seed,
     }
+    if context:
+        configuration.update(
+            identity={
+                key: context.get(key)
+                for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+            },
+            information_scope=context.get("information_scope", "unspecified"),
+        )
+    return configuration
 
 
 def _init_runtime(
@@ -616,7 +652,7 @@ def _init_runtime(
         "molmo": lambda rpc: {"molmo_client": MolmoClient(rpc)},
     }
     selected = set(starters) if components is None else set(components)
-    if getattr(args, "planner", None) != "flash":
+    if getattr(args, "planner", None) != "flash" or _frozen_execution():
         selected.discard("molmo")
     unknown = selected.difference(starters)
     if unknown:

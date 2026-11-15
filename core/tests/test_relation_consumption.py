@@ -62,6 +62,50 @@ class RelationConsumptionTests(unittest.TestCase):
         self.assertTrue(report['relations']['rhoB']['value'])
         self.assertTrue(report['relations']['rhoC']['value'])
 
+    def test_contextual_dispatch_is_recomputed_from_its_saved_selection(self):
+        self.configure()
+        from rsi_vla.relation_learning import contextual_research_policy
+        from rsi_vla.research import ResearchJob
+        from rsi_vla.research_tools import ResearchTools
+        rho = self.store.get('rho', self.bundle.rho_ref)
+        rho['rhoC'] = contextual_research_policy(rho['rhoC'], max_explorations=1,
+                                               data_context={'dataset_ref': 'not_training'})
+        atomic_json(self.store.path('rho', self.bundle.rho_ref), rho)
+        tools = ResearchTools(self.store, ResearchJob(self.store, 'context-job', self.bundle.bundle_id,
+            {'input_tokens': 10}), {'protocol_id': 'protocol', 'scope': 'offline', 'benchmark_id': 'bench',
+                'task_policy': {'schema': 'rsi-task-policy-v1'},
+                'task_sets': {'development': {'task_keys': ['task'], 'seeds': [1]}}}, domain_policy={})
+        selection = tools.research_relation_admission(['result'], legal_repairs=['planner_task_hint'],
+            selection_id='selection', technical_admitted=True, data_admitted=True)
+        self.context['execution_binding']['records']['rho_ref'] = rho
+        self.context['relation_dispatch_admission'] = {**selection, 'actual_dispatch_gate': True}
+        atomic_json(self.output / 'runtime_context.json', self.context)
+        report = evaluate_relation_consumption(self.store, self.output)
+        self.assertTrue(report['relations']['rhoC']['value'])
+        self.context['relation_dispatch_admission']['decisions'][0]['exploration_used_before'] = 50
+        atomic_json(self.output / 'runtime_context.json', self.context)
+        with self.assertRaisesRegex(ValueError, 'reserved selection'):
+            evaluate_relation_consumption(self.store, self.output)
+
+    def test_readable_rhoA_reports_reference_payload_and_unknown_quality_separately(self):
+        self.configure()
+        from rsi_vla.research_transport import pack, sdk_input
+        request = self.store.get('bounded_requests', 'request')
+        request.update(request_id='request', job_id='job', readable_evidence={'schema': 'rsi-readable-development-v1'})
+        transport = pack(request)
+        atomic_json(self.store.path('bounded_requests', 'request'), request)
+        atomic_json(self.store.path('bounded_transports', 'request'), transport)
+        actual = sdk_input(transport, {'type': 'object'})
+        self.store.put('research_sdk_inputs', 'request', actual)
+        self.store.put('research_sdk_consumption', 'request', {'request_id': 'request',
+            'sdk_turn_returned': True, 'image_bytes_sent': False})
+        report = evaluate_relation_consumption(self.store, self.output, research_request_ids=['request'])
+        measurement = report['relations']['rhoA']['measurement']
+        self.assertEqual(measurement['media_mode'], 'text_only')
+        self.assertEqual(measurement['sdk_prompt_bytes'], len(actual['prompt'].encode('utf-8')))
+        self.assertIsNone(measurement['diagnostic_quality'])
+        self.assertIsNone(measurement['persisted_media_bytes'])
+
     def test_foreign_research_candidate_and_changed_dispatch_are_rejected(self):
         self.configure()
         self.store.put('llm_requests', 'foreign', dict(bundle_id='other', evidence_views=[]))

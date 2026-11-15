@@ -17,6 +17,60 @@ from .contracts import RunBundle
 from .storage import atomic_json
 
 SCHEMA = "rsi-relation-feedback-v1"
+CONTEXT_SCHEMA = "rsi-research-context-policy-v2"
+
+
+def research_context(*, task_key, operator, evidence_category, signature, data_context):
+    """Keep operator, evidence, executable and data applicability in the decision key."""
+    import json
+    if (not all(isinstance(v, str) and v for v in (task_key, operator, evidence_category))
+            or set(signature) != set(VERSION_FIELDS) or not all(signature.values())
+            or not isinstance(data_context, dict) or not data_context):
+        raise ValueError("research context needs task/operator/evidence/version/data applicability")
+    value = dict(task_key=task_key, operator=operator, evidence_category=evidence_category,
+                 version_signature=dict(signature), data_context=deepcopy(data_context))
+    return {"key": json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")), **value}
+
+
+def contextual_research_policy(legacy, *, max_explorations, data_context):
+    """Create an explicit new policy without reinterpreting legacy screening samples."""
+    if (type(max_explorations) is not int or not 1 <= max_explorations <= 32
+            or not isinstance(data_context, dict) or not data_context):
+        raise ValueError("contextual rhoC needs finite exploration bound and data context")
+    return {"type": CONTEXT_SCHEMA, "values": {}, "feedback": [], "exploration_reservations": [],
+            "max_explorations": max_explorations, "data_context": deepcopy(data_context),
+            "legacy_baseline": deepcopy(legacy), "legacy_feedback_semantics": "unchanged_not_contextual"}
+
+
+def contextual_research_decision(policy, job, *, context, evidence_available, inspected,
+                                 experiment_permitted, legal_repairs, technical_admitted,
+                                 data_admitted, exploration_used=0):
+    """Finite exploration changes preference only after all ordinary prerequisites pass."""
+    if policy.get("type") != CONTEXT_SCHEMA:
+        raise ValueError("contextual research requires its explicit policy version")
+    if (not context or context.get("data_context") != policy["data_context"]
+            or context.get("operator") not in legal_repairs):
+        raise ValueError("research context differs from the bound operator/data applicability")
+    if type(exploration_used) is not int or exploration_used < 0:
+        raise ValueError("exploration usage must be a nonnegative count")
+    row = {"context": deepcopy(context), "policy_type": CONTEXT_SCHEMA,
+           "action": "defer", "reason": "prerequisites_missing", "exploration": False,
+           "unexecuted_task_gain": None, "exploration_used_before": exploration_used}
+    if job.state["status"] != "running" or not evidence_available:
+        return row
+    if not inspected:
+        return {**row, "action": "inspect", "reason": "inspect_legal_evidence"}
+    if not experiment_permitted or not technical_admitted or not data_admitted:
+        return row
+    feedback = policy.get("values", {}).get(context["key"], {})
+    known = feedback.get("screening_pass", {})
+    if known.get("count", 0) and known["total"] / known["count"] > .5:
+        return {**row, "action": "bounded_experiment", "reason": "context_screening_yield"}
+    if exploration_used < policy["max_explorations"]:
+        return {**row, "action": "bounded_experiment", "reason": "bounded_context_reevaluation",
+                "exploration": True}
+    return {**row, "reason": "registered_exploration_exhausted"}
+
 VERSION_FIELDS = ("theta_ref", "processor_ref", "phi_ref", "code_ref")
 
 
@@ -109,6 +163,8 @@ def learn_relations(tools, destination, learning_id, result_ids, *, max_feedback
                  "frozen": False, "feedback": [], "missing": deepcopy(before.get("missing", [])),
                  "snapshot": deepcopy(before)}
         for name in selected:
+            if name == "rhoC" and before[name].get("type") == CONTEXT_SCHEMA:
+                continue
             if before[name].get("type") != SCHEMA:
                 state["snapshot"][name] = {"type": SCHEMA, "values": {}}
             elif before.get("schema") != SCHEMA:
@@ -175,7 +231,7 @@ def learn_relations(tools, destination, learning_id, result_ids, *, max_feedback
             state["missing"].append({"result_id": result_key, "relation": "rhoB",
                 "reason": "no independent worker/start/handoff feedback; terminal outcome is not route supervision"})
         screening = result["intervention"].get("screening_checks")
-        if "rhoC" not in selected:
+        if "rhoC" not in selected or state["snapshot"]["rhoC"].get("type") == CONTEXT_SCHEMA:
             continue
         if result["intervention"].get("runtime_loaded") is True and isinstance(screening, dict) and screening:
             known = all(type(value) is bool for value in screening.values())
@@ -189,6 +245,40 @@ def learn_relations(tools, destination, learning_id, result_ids, *, max_feedback
         else:
             state["missing"].append({"result_id": result_key, "relation": "rhoC",
                 "reason": "no loaded trial with explicit development screening feedback"})
+    if "rhoC" in selected and state["snapshot"]["rhoC"].get("type") == CONTEXT_SCHEMA:
+        policy = state["snapshot"]["rhoC"]
+        reservations = {row["selection_id"]: row for row in policy.get("exploration_reservations", [])}
+        for row in tools.store.all("research_relation_selections"):
+            if (row.get("rho_ref") == tools.base.rho_ref and row.get("protocol_id") == tools.protocol["protocol_id"]
+                    and row.get("exploration_count", 0)):
+                reservations[row["selection_id"]] = {"selection_id": row["selection_id"],
+                    "exploration_count": row["exploration_count"], "protocol_id": row["protocol_id"]}
+        policy["exploration_reservations"] = list(reservations.values())
+        for row in tools.store.all("contextual_research_feedback"):
+            if row.get("base_bundle_id") != tools.base.bundle_id or row.get("protocol_id") != tools.protocol["protocol_id"]:
+                continue
+            key = row["feedback_id"]
+            if key in seen:
+                continue
+            if len(state["feedback"]) >= max_feedback:
+                raise ValueError("relation feedback bound exhausted")
+            policy = state["snapshot"]["rhoC"]
+            if row["context"]["data_context"] != policy["data_context"]:
+                continue
+            values = policy["values"].setdefault(row["context"]["key"], {})
+            for dimension in ("technical_valid", "screening_pass", "old_capability"):
+                value = row["feedback"][dimension]
+                if dimension == "screening_pass" and row["feedback"]["technical_valid"] is not True:
+                    continue
+                if value is not None:
+                    item = values.setdefault(dimension, {"count": 0, "total": 0.0})
+                    item["count"] += 1
+                    item["total"] += float(value)
+            policy.setdefault("feedback", []).append(deepcopy(row))
+            state["feedback"].append({"feedback_id": key, "relation": "rhoC", "state": row["context"]["key"],
+                "context": row["context"], "feedback": row["feedback"], "source_refs": row["source_refs"],
+                "criterion": "contextual_development_feedback_v2", "attribution": "observational_not_causal"})
+            seen.add(key)
     state["missing"] = [dict(items) for items in dict.fromkeys(tuple(sorted(row.items())) for row in state["missing"])]
     atomic_json(path, state)
     return state

@@ -347,3 +347,73 @@ def test_provider_error_after_budget_request_does_not_become_budget_success(tmp_
     )
     assert recorder.stats()["attempt_closed"] is False
     assert recorder.stats()["termination_reason"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "complete",
+        "foreign_producer",
+        "pending",
+        "unclosed",
+        "unknown_steps",
+        "count_mismatch",
+        "missing_native",
+        "wrong_identity",
+        "technical_error",
+    ],
+)
+def test_frozen_arm_closes_native_owner_physical_step_budget_only_with_full_feedback(
+    tmp_path, case
+):
+    client = RuntimeJournal(_context(tmp_path, environment_steps=400))
+    owner = RuntimeJournal(
+        {**client.context, "output_dir": str(tmp_path / "environment_service")}
+    )
+    marker = owner.mark_budget_stop("environment_steps", limit=400, observed=400)
+    context = _result_context(tmp_path, client, SimpleNamespace(stats=lambda: {}))
+    context.environment_metrics["runtime"]["environment_service"][
+        "action_events_ref"
+    ] = str(owner.events_path)
+    context.environment_metrics["episode_execution"] = {
+        "arm": "D",
+        "status": "budget_exhausted",
+        "budget_stop_ref": str(client.budget_stop_path),
+        "executed_steps": 370,
+        "unknown_steps": 0,
+    }
+    service_ref = Path(
+        context.environment_metrics["runtime"]["environment_service"]["costs_ref"]
+    )
+    service = json.loads(service_ref.read_text())
+    service.update(
+        environment_steps_reserved=400,
+        environment_steps_confirmed=400,
+        setup_steps_confirmed=30,
+        policy_steps_confirmed=370,
+    )
+    if case == "foreign_producer":
+        marker["producer_events_ref"] = str(tmp_path / "other-events.jsonl")
+    elif case == "pending":
+        service["pending_action"] = True
+    elif case == "unclosed":
+        service["service_closed"] = False
+    elif case == "unknown_steps":
+        service["environment_steps_unknown"] = 1
+    elif case == "count_mismatch":
+        service["environment_steps_confirmed"] = 395
+    elif case == "missing_native":
+        service["last_native_success"] = None
+    elif case == "wrong_identity":
+        marker["identity"]["run_id"] = "other-attempt"
+    elif case == "technical_error":
+        context.environment_metrics["episode_execution"]["status"] = "technical_error"
+    service_ref.write_text(json.dumps(service))
+    client.budget_stop_path.write_text(json.dumps(marker))
+    result = json.loads(finalize_run(context).read_text())
+    assert result["attempt_closed"] is (case == "complete")
+    assert result["benchmark_success"] is (False if case == "complete" else None)
+    if case == "complete":
+        assert result["verified_budget_exhaustion"]
+        assert result["termination_reason"] == "verified_budget_exhaustion"
+        assert result["attempt_outcome_source"]["planner_budget_stop"] is None

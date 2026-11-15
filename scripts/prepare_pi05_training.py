@@ -8,10 +8,11 @@ import shutil
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core/src"))
-from rsi_vla.adapters.pi05_training import (build_recipe, checkpoint_tensor_inventory, dataset_acquisition_proposal,
+from rsi_vla.adapters.pi05_training import (build_recipe, build_learning_recipe, checkpoint_tensor_inventory, dataset_acquisition_proposal,
     acquire_dataset_metadata, acquire_demonstration_files, materialize_demonstration_subset,
-    inspect_checkpoint, inspect_native_config, read_native_batch,
-    static_training_memory, validate_dataset_manifest, verify_installed_sources)
+    inspect_checkpoint, inspect_native_config, read_native_batch, prepare_cpu_demonstrations,
+    static_training_memory, validate_dataset_manifest, verify_installed_sources,
+    audit_demonstration_payload)
 from rsi_vla.training import TrainingBudget, dynamic_lock
 
 
@@ -23,6 +24,10 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--run-id", default="pi05-resource-pilot")
     parser.add_argument("--read-batch", action="store_true")
+    parser.add_argument("--learning-plan", help="registered finite learning plan JSON; pilot remains the default")
+    parser.add_argument("--budget", help="TrainingBudget JSON for a pilot or the registered learning job")
+    parser.add_argument("--audit-payload", action="store_true", help="audit local demonstrations on CPU; does not admit them")
+    parser.add_argument("--cpu-pipeline", action="store_true")
     parser.add_argument("--acquire", choices=["metadata", "demonstrations"])
     parser.add_argument("--permit")
     parser.add_argument("--metadata-root")
@@ -36,6 +41,26 @@ def main():
     os.environ["JAX_PLATFORMS"] = "cpu"
     output = Path(args.output).resolve()
     os.environ["HF_DATASETS_CACHE"] = str(output / "datasets-cache")
+    if args.audit_payload:
+        if not args.dataset_manifest:
+            raise ValueError("--audit-payload requires --dataset-manifest")
+        if output.exists():
+            raise FileExistsError("payload audit output must be new")
+        manifest = json.loads(Path(args.dataset_manifest).read_text())
+        report = audit_demonstration_payload(manifest)
+        output.mkdir(parents=True)
+        (output / "payload-audit.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps(report, indent=2))
+        return
+    if args.cpu_pipeline:
+        if not all((args.permit, args.metadata_root, args.model_path, args.norm_stats_path)):
+            raise ValueError("CPU pipeline needs permit, metadata, model and normalization paths")
+        permit = json.loads(Path(args.permit).read_text())
+        with dynamic_lock():
+            report = prepare_cpu_demonstrations(metadata_root=args.metadata_root, output=output,
+                permit=permit, model_path=args.model_path, norm_stats_path=args.norm_stats_path)
+        print(json.dumps(report, indent=2))
+        return
     if args.acquire:
         if not args.permit:
             raise PermissionError("dataset acquisition requires a separate permit")
@@ -70,7 +95,11 @@ def main():
         report["tensor_inventory"] = checkpoint_tensor_inventory(safe)
         report["static_training_memory"] = static_training_memory(safe)
     # Proposal only. Training and loading need their own explicit authorization.
-    budget = TrainingBudget(900, 900, 1, 64 * 1024**3, 3)
+    if args.learning_plan and not args.budget:
+        raise ValueError("finite learning preparation requires --budget")
+    learning_plan = json.loads(Path(args.learning_plan).read_text()) if args.learning_plan else None
+    budget = (TrainingBudget(**json.loads(Path(args.budget).read_text())) if args.budget
+              else TrainingBudget(900, 900, 1, 48 * 1024**3, 3))
     dataset_root = "/UNQUALIFIED_DATASET"
     manifest = None
     if args.dataset_manifest:
@@ -83,9 +112,11 @@ def main():
     norm_snapshot.parent.mkdir(parents=True)
     shutil.copyfile(report["checkpoint"]["norm_stats"], norm_snapshot)
     report["processor_snapshot"] = str(norm_snapshot)
-    recipe = build_recipe(dataset_root=dataset_root, model_path=args.model_path,
+    builder = build_learning_recipe if learning_plan else build_recipe
+    kwargs = {"learning_plan": learning_plan} if learning_plan else {}
+    recipe = builder(dataset_root=dataset_root, model_path=args.model_path,
                           norm_stats_path=norm_snapshot, output_root=output,
-                          run_id=args.run_id, budget=budget)
+                          run_id=args.run_id, budget=budget, **kwargs)
     report["native_config"] = inspect_native_config(recipe)
     if args.read_batch:
         if manifest is None:
@@ -93,7 +124,7 @@ def main():
         report["batch"] = read_native_batch(recipe, manifest)
     (output / "preparation.json").write_text(json.dumps(report, indent=2) + "\n")
     (output / "recipe.json").write_text(json.dumps(recipe, indent=2) + "\n")
-    permit = {"kind": "pi05-training-pilot", "authorized": False,
+    permit = {"kind": "pi05-training-learning" if learning_plan else "pi05-training-pilot", "authorized": False,
               "cuda_device": None,
               "run_id": args.run_id, "dataset_root": dataset_root,
               "model_path": str(Path(args.model_path).resolve()),

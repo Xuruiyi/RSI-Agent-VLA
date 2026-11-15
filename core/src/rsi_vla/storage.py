@@ -1,5 +1,7 @@
 """Single-worker local JSON persistence; separate roots support process permissions."""
 import json
+import base64
+import gzip
 import os
 import re
 from pathlib import Path
@@ -43,19 +45,38 @@ class Records:
             if self.get(kind, key) != value:
                 raise ValueError(f"conflicting {kind} identity: {key}")
             return False
+        if kind in getattr(self, 'archive_record_kinds', ()) and getattr(self, 'llm_archive_format', None) == 'gzip_json_v1':
+            payload = json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+            value = {'schema': 'rsi-lossless-record-v1', 'kind': kind, 'key': key,
+                     'encoding': 'gzip+base64+json',
+                     'payload': base64.b64encode(gzip.compress(payload, mtime=0)).decode('ascii')}
         atomic_json(path, value)
         return True
 
     def get(self, kind, key):
-        return json.loads(self.path(kind, key).read_text(encoding="utf-8"))
+        value = json.loads(self.path(kind, key).read_text(encoding="utf-8"))
+        if isinstance(value, dict) and value.get('schema') == 'rsi-lossless-record-v1':
+            if kind not in {'llm_requests', 'bounded_requests'} or value.get('kind') != kind or value.get('key') != key or value.get('encoding') != 'gzip+base64+json':
+                raise ValueError('lossless archive binding/codec differs from its record identity')
+            return json.loads(gzip.decompress(base64.b64decode(value['payload'], validate=True)))
+        return value
 
     def all(self, kind):
-        return [json.loads(p.read_text(encoding="utf-8"))
+        return [self.get(kind, p.stem)
                 for p in sorted((self.root / identifier(kind)).glob("*.json"))]
 
 
 class ResearchStore(Records):
     """No active-version or formal decision write API."""
+    def __init__(self, root, *, llm_archive_format=None, archive_record_kinds=('llm_requests',)):
+        super().__init__(root)
+        if llm_archive_format not in {None, 'gzip_json_v1'}:
+            raise ValueError('unsupported Research archive encoding')
+        if set(archive_record_kinds) - {'llm_requests', 'bounded_requests'}:
+            raise ValueError('archive compression requires actual Records.get consumers')
+        self.llm_archive_format = llm_archive_format
+        self.archive_record_kinds = tuple(archive_record_kinds)
+
     def save_bundle(self, bundle):
         for kind, ref in (("psi", bundle.psi_ref), ("memory", bundle.memory_ref), ("rho", bundle.rho_ref)):
             self.get(kind, ref)

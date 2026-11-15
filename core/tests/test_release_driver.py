@@ -339,7 +339,7 @@ class Release08DriverTest(unittest.TestCase):
             with patch.object(driver, 'ResearchStore') as store, \
                     patch.object(driver, 'Candidate', return_value=candidate), \
                     patch.object(driver, 'select_comparison_attempts'), \
-                    patch.object(driver, 'evaluate_matrix', return_value=SimpleNamespace(result_id='r')), \
+                    patch.object(driver, 'evaluate_matrix', return_value=SimpleNamespace(result_id='r', intervention={})), \
                     patch.object(driver, 'inspect_initial_comparison_result', return_value={'passed': True}), \
                     patch.object(driver, 'inspect_initial_result', return_value={'passed': False}), \
                     patch.object(driver, 'EvaluationStore') as evaluations, \
@@ -588,7 +588,7 @@ class Release08DriverTest(unittest.TestCase):
             with patch.object(driver, 'ResearchStore') as store, \
                     patch.object(driver, 'Candidate', return_value=candidate), \
                     patch.object(driver, 'select_comparison_attempts'), \
-                    patch.object(driver, 'evaluate_matrix', return_value=SimpleNamespace(result_id='r')), \
+                    patch.object(driver, 'evaluate_matrix', return_value=SimpleNamespace(result_id='r', intervention={})), \
                     patch.object(driver, 'inspect_initial_comparison_result', return_value=comparison), \
                     patch.object(driver, 'inspect_initial_result', return_value=qualification):
                 store.return_value.get.return_value = {}

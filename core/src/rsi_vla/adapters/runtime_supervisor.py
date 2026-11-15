@@ -85,6 +85,7 @@ def supervise(command: list[str], *, context_path: str | Path,
     The context must carry dynamic_authorized=true and authorization_ref.
     No retries, deleted artifacts or follow-up jobs are performed.
     """
+    from ..storage import atomic_json
     context_path = Path(context_path).resolve()
     context = json.loads(context_path.read_text(encoding='utf-8'))
     if context.get('dynamic_authorized') is not True or not context.get('authorization_ref'):
@@ -115,9 +116,17 @@ def supervise(command: list[str], *, context_path: str | Path,
     effective_interval = min(poll_interval_s, complete_seconds / 10)
     stop_deadline = complete_deadline - effective_grace - effective_interval
     from ..process_accounting import StorageMeter
+    state_ref = context.get('storage_meter_state_ref')
+    storage_state = json.loads(Path(state_ref).read_text()) if state_ref and Path(state_ref).exists() else None
     storage_meter = StorageMeter(context.get('storage_write_roots', [output_dir]),
-        baseline=context.get('storage_baseline', {}))
+        baseline=context.get('storage_baseline', {}), state=storage_state)
+    business_before = storage_meter.cumulative
+    scope_state_ref = context.get('scope_meter_state_ref')
+    scope_state = json.loads(Path(scope_state_ref).read_text()) if scope_state_ref and Path(scope_state_ref).exists() else None
+    scope_meter = StorageMeter(context['scope_accounting_roots'], state=scope_state) if context.get('scope_accounting_roots') else None
+    scope_before = scope_meter.cumulative if scope_meter else 0
     storage_record = storage_meter.sample()
+    scope_record = scope_meter.sample() if scope_meter else None
     peak_storage = storage_record['cumulative_new_bytes_lower_bound']
     stop_reason = None
     cleanup_seconds = 0.0
@@ -149,6 +158,7 @@ def supervise(command: list[str], *, context_path: str | Path,
                 while True:
                     elapsed = time.monotonic() - started
                     storage_record = storage_meter.sample()
+                    scope_record = scope_meter.sample() if scope_meter else None
                     peak_storage = max(peak_storage, storage_record['cumulative_new_bytes_lower_bound'])
                     from ..storage import atomic_json
                     atomic_json(output_dir / 'storage-progress.json', storage_record)
@@ -158,6 +168,10 @@ def supervise(command: list[str], *, context_path: str | Path,
                         stop_reason = deadline_reason
                     elif peak_storage >= storage_limit:
                         stop_reason = 'storage_bytes'
+                    elif scope_meter and scope_record['cumulative_new_bytes_lower_bound'] - scope_before >= context['scope_storage_remaining_bytes']:
+                        stop_reason = 'scope_storage_bytes'
+                    elif scope_meter and sum({value['inode']:value['size'] for value in scope_meter.previous.values()}.values()) >= context['scope_current_disk_limit_bytes']:
+                        stop_reason = 'scope_current_disk_bytes'
                     if stop_reason is not None:
                         publish_stop(stop_reason)
                         cleanup_started = time.monotonic()
@@ -212,14 +226,28 @@ def supervise(command: list[str], *, context_path: str | Path,
         'cleanup_confirmed': not remaining, 'remaining_process_ids': remaining,
         'missing': ['gpu_utilization_telemetry', 'backend_token_costs:see_runtime_costs.json'],
     }
+    report['business_storage_delta_bytes'] = storage_meter.cumulative - business_before
+    if scope_meter:
+        report['scope_storage_accounting'] = scope_meter.sample()
+        report['scope_storage_delta_bytes'] = scope_meter.cumulative - scope_before
+        report['control_storage_delta_lower_bound'] = max(0, report['scope_storage_delta_bytes'] - report['business_storage_delta_bytes'])
     # Include the report itself in the final retained byte count.
     for _ in range(3):
         report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
         report['storage_accounting'] = storage_meter.sample()
         report['storage_bytes'] = max(report['storage_bytes'], report['storage_accounting']['cumulative_new_bytes_lower_bound'])
         report['storage_overshoot_bytes'] = max(0, report['storage_bytes'] - storage_limit)
+        report['business_storage_delta_bytes'] = storage_meter.cumulative - business_before
+        if scope_meter:
+            report['scope_storage_accounting'] = scope_meter.sample()
+            report['scope_storage_delta_bytes'] = scope_meter.cumulative - scope_before
+            report['control_storage_delta_lower_bound'] = max(0, report['scope_storage_delta_bytes'] - report['business_storage_delta_bytes'])
     report['storage_output_bytes_at_sample'] = _storage_bytes(output_dir)
     report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    if state_ref:
+        atomic_json(state_ref, storage_meter.state())
+    if scope_meter and scope_state_ref:
+        atomic_json(scope_state_ref, scope_meter.state())
     return report
 
 

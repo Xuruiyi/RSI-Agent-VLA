@@ -10,6 +10,17 @@ ACTION_TOOLS = {'vla_execute','pi0_pick','pi0_doubled','move_to','move_pose','re
                 'rotate_wrist','rotate_pitch','execute_action','wam_act'}
 
 
+def read_model_events(root, gate, identity):
+    """Consume an explicit closed zero-forward gate when no stream was created."""
+    path = Path(root) / 'model_requests.jsonl'
+    if (not path.exists() and gate.get('requests_forwarded') == 0
+            and gate.get('active_requests_at_close') == 0
+            and gate.get('cleanup_complete') is True
+            and all(gate.get('identity', gate).get(k) == v for k, v in identity.items())):
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
 def request_usage(model_events, *, expected_requests=None):
     """Keep returned usage as a lower bound when any admitted request is missing."""
     admitted = [event for event in model_events if event['kind']=='request_admitted']
@@ -32,7 +43,7 @@ def request_usage(model_events, *, expected_requests=None):
     return token_values, missing
 
 
-def transport_issues(root, identity, events):
+def transport_issues(root, identity, events, *, result_path=None):
     """Only a fully evidenced native-success consumer close is expected."""
     issues = [e for e in events if e['kind'] in {'transport_error', 'request_incomplete'}
               or e['kind'] == 'request_returned' and e.get('http_status') != 200
@@ -43,7 +54,7 @@ def transport_issues(root, identity, events):
     root = Path(root)
     try:
         marker = json.loads((root / 'native_completion.json').read_text())
-        raw = json.loads((root / 'result.json').read_text())
+        raw = json.loads((Path(result_path) if result_path else root / 'result.json').read_text())
         service = json.loads((root / 'environment_service/runtime_costs.json').read_text())
         bound = all(all(d.get('identity', d).get(k) == v for k, v in identity.items())
                     for d in (marker, raw, service))
@@ -156,14 +167,18 @@ def local_stop_audit(root, identity, model_events, action_events, raw=None):
     return result
 
 
-def finalize_runtime(context):
+def finalize_runtime(context, *, raw_result_path=None, derived_root=None):
     """Keep raw records; absent or interrupted evidence stays unknown."""
     root = Path(context['output_dir'])
+    selected_raw = Path(raw_result_path).resolve() if raw_result_path else root / 'result.json'
+    destination = Path(derived_root).resolve() if derived_root else root
+    if derived_root and (destination == root.resolve() or destination.is_relative_to(root.resolve()) or root.resolve().is_relative_to(destination)):
+        raise ValueError('versioned closure outputs must be outside original Runtime output')
     identity = {key:context[key] for key in IDENTITY}
     missing = []
     def read(name):
         try:
-            value = json.loads((root/name).read_text())
+            value = json.loads((selected_raw if name == 'result.json' else root/name).read_text())
             if any(value.get('identity', value).get(k) != v for k,v in identity.items()):
                 raise ValueError('identity mismatch')
             return value
@@ -187,7 +202,13 @@ def finalize_runtime(context):
     model = read('model_load.json')
     runner_cleanup = read('runner_cleanup.json')
     action_events = events('action_events.jsonl')
-    model_events = events('model_requests.jsonl')
+    model_evidence_unconfirmed = False
+    try:
+        model_events = read_model_events(root, gate, identity)
+    except (OSError, ValueError, TypeError):
+        missing.append('model_requests.jsonl')
+        model_evidence_unconfirmed = True
+        model_events = []
     stop_audit = local_stop_audit(root, identity, model_events, action_events, raw)
     runtime_stop = root/'runtime_stop.json'
     budget_stop = root/'budget_stop.json'
@@ -195,13 +216,13 @@ def finalize_runtime(context):
     if runtime_stop.exists():
         reason = read('runtime_stop.json').get('reason') or reason
     budget = read('budget_stop.json') if budget_stop.exists() else {}
-    bad_transport = bool(transport_issues(root, identity, model_events))
+    bad_transport = bool(transport_issues(root, identity, model_events, result_path=selected_raw))
     health = execution_health(action_events, identity, source_ref=str(root/'action_events.jsonl'))
     if any(name.startswith('action_events.jsonl') for name in missing):
         health['status'] = 'unconfirmed'
         health['missing'].append('execution_events_unavailable_or_incomplete')
     execution_fault = health['status'] != 'clear' or (raw.get('execution_health') or {}).get('status', 'clear') != 'clear'
-    technical = bool(stop_audit['issues'] or execution_fault or raw.get('validity') == 'technical_invalid' or bad_transport or raw.get('error') or supervisor.get('error') or
+    technical = bool(model_evidence_unconfirmed or stop_audit['issues'] or execution_fault or raw.get('validity') == 'technical_invalid' or bad_transport or raw.get('error') or supervisor.get('error') or
         (root/'launcher_error.json').exists() or supervisor.get('exit_code') not in (0, None))
     cancelled = reason == 'external_interruption' or any(e.get('stop_reason') == 'cancelled' for e in health['stops']) or raw.get('interrupted') is True and not technical and not budget
     clean = (supervisor.get('cleanup_confirmed') is True
@@ -227,21 +248,23 @@ def finalize_runtime(context):
     native_task_result = {key: raw.get(key) for key in
                           ('benchmark_success', 'benchmark_status', 'terminated', 'truncated', 'attempt_closed', 'termination_reason')}
     native_task_result.update(last_native_success=service.get('last_native_success'),
-                              source_ref=str(root/'result.json'), service_ref=str(root/'environment_service/runtime_costs.json'))
+                              source_ref=str(selected_raw), service_ref=str(root/'environment_service/runtime_costs.json'))
     independent = {**raw, **identity, 'schema_version':'1.0', 'task':context.get('task',{}),
         'benchmark_success':raw.get('benchmark_success') if accepted else None,
         'benchmark_status':raw.get('benchmark_status') if accepted else 'unknown',
         'attempt_closed':accepted, 'validity':'valid' if accepted else 'technical_invalid',
+        'technical_valid':False if technical else True if clean and not missing else None,
+        'native_terminal_available':accepted,
         'outcome':'success' if accepted and raw['benchmark_success'] else 'failure' if accepted else 'unknown',
         'runtime_status':status, 'runtime_stop_reason':reason or ('execution_technical_error' if execution_fault else None) or ('vla_cancelled' if cancelled else None) or ('model_transport_error' if bad_transport else None)
             or ('backend_exit_'+str(supervisor['exit_code']) if supervisor.get('exit_code') not in (0,None) else None)
             or budget.get('reason') or raw.get('termination_reason') or 'result_unavailable_or_unconfirmed',
         'execution_health':health, 'native_task_result':native_task_result, 'local_stop_audit':stop_audit,
-        'raw_result_ref':str(root/'result.json') if raw else None,
-        'closure_source':'launcher after process and transport cleanup', 'missing':list(missing)}
+        'raw_result_ref':str(selected_raw) if raw else None,
+        'closure_source':'versioned offline reparse of original launcher/native facts' if derived_root else 'launcher after process and transport cleanup', 'missing':list(missing)}
     admitted = [e for e in model_events if e['kind']=='request_admitted']
     token_values, token_missing = request_usage(model_events, expected_requests=gate.get('requests_forwarded'))
-    if not model_events and gate.get('requests_forwarded') is None:
+    if model_evidence_unconfirmed or not model_events and gate.get('requests_forwarded') is None:
         token_values={name:None for name in token_values}
         token_missing.extend(['input_tokens','cached_input_tokens','output_tokens'])
     missing.extend(token_missing)
@@ -276,6 +299,6 @@ def finalize_runtime(context):
         'timing_relationships':'whole_job includes startup through final cleanup; model load/request/tool/media/cleanup are nested or overlapping diagnostics, never summed as total; completed action_tool and state_media are subsets of completed tool spans; readonly calls may overlap; incomplete tools have no full-span estimate; cleanup_media is outside tool; process_group_cleanup includes daemon drain and may overlap cleanup_media',
         'missing':missing + [name for name,value in timings.items() if value is None],
         'supervisor_ref':str(root/'supervisor.json'), 'launcher_ref':str(root/'launcher_costs.json')}
-    atomic_json(root/'independent_result.json',independent)
-    atomic_json(root/'cost_breakdown.json',costs)
+    atomic_json(destination/'independent_result.json',independent)
+    atomic_json(destination/'cost_breakdown.json',costs)
     return independent

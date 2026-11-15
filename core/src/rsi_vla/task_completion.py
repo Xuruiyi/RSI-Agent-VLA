@@ -22,12 +22,15 @@ SCHEMA = "rsi-task-completion-v1"
 ACTION_ROLES = {
     "runtime": "runtime",
     "research_prepare": "research",
+    "research_feedback": "research",
+    "evidence_followup_prepare": "research",
     "research": "research",
     "development_register": "research",
     "development_collect": "evaluation",
     "development_reconcile": "research",
     "development_base_collect": "evaluation",
     "development_base_import": "research",
+    "development_reparse": "evaluation",
     "candidate_submit": "research",
     "audit": "evaluation",
     "matrix_evaluation": "evaluation",
@@ -209,7 +212,7 @@ class TaskCompletionBackend:
         self.protocol = load_protocol(config["protocol_ref"])
         if not task_policy(self.protocol):
             raise ValueError("new-task consumer requires explicit new task policy")
-        self.store = ResearchStore(config["research_store_ref"])
+        self.store = ResearchStore(config["research_store_ref"], llm_archive_format=config.get("llm_archive_format"), archive_record_kinds=config.get("research_archive_record_kinds", ("llm_requests",)))
         self.evaluations = EvaluationStore(config["evaluation_store_ref"])
 
     def registered(self, op):
@@ -457,6 +460,10 @@ class TaskCompletionBackend:
 
     def execute(self, op, inputs):
         kind, payload = self.registered(op)
+        if kind == "development_reparse":
+            self.authority()
+            from rsi_vla.development_reparse import reparse_development_attempt
+            return reparse_development_attempt(self.config, payload)
         if kind in {"runtime", "research"}:
             self.validate_dynamic(kind, payload)
         if kind == "goal_value_review":
@@ -578,6 +585,53 @@ class TaskCompletionBackend:
                     "job_state_before_dispatch": policy_tools.job.state}
             execute_runtime(plan)
             return {"returned": True, "run_id": slot["run_id"]}
+        if kind == "research_feedback":
+            tools, cfg = self.tools(payload["request_id"])
+            execution = self.store.get("llm_executions", cfg["request_id"])
+            facts = execution["transport_facts"]
+            output = Path(cfg["output_ref"])
+            supervisor = read(output / "supervisor.json")
+            sdk = read(output / "sdk-result.json")
+            technical = (
+                facts.get("effective_model") == "gpt-6.1-sol"
+                and facts.get("effective_reasoning_effort") == "high"
+                and supervisor.get("status") == "completed"
+                and supervisor.get("exit_code") == 0
+                and supervisor.get("cleanup_confirmed") is True
+                and sdk["status"].rsplit(".", 1)[-1] == "completed"
+            )
+            result_id = payload.get("result_id")
+            feedback = tools.record_contextual_research_feedback(
+                payload["feedback_id"], selection_id=cfg["request_id"],
+                result_id=result_id,
+                technical_valid=None if result_id else technical,
+                costs=None if result_id else execution["costs"],
+                source_refs=[str(output / name) for name in (
+                    "sdk-result.json", "supervisor.json", "model_requests.jsonl")])
+            trial_ref = self.store.path("rule_trials", cfg["request_id"] + "-experiment")
+            supplement_ref = self.store.path("research_evidence_supplements", cfg["request_id"])
+            if result_id:
+                next_action = "experiment_completed"
+            elif trial_ref.exists():
+                next_action = "development"
+            elif supplement_ref.exists() and read(supplement_ref)["reads"]:
+                next_action = "prepare_evidence_followup"
+            else:
+                next_action = "defer"
+            route = {"request_id": cfg["request_id"], "feedback_id": payload["feedback_id"],
+                     "next_action": next_action, "result_id": result_id}
+            self.store.put("research_feedback_routes", payload["feedback_id"], route)
+            return {**feedback, **route}
+        if kind == "evidence_followup_prepare":
+            tools, cfg = self.tools(payload["request_id"])
+            parent = payload["parent_request_id"]
+            transport = TaskResearchAdapter(cfg).prepare_evidence_followup(
+                tools, parent_request_id=parent, request_id=cfg["request_id"],
+                max_input_tokens=cfg["max_input_tokens"],
+                max_output_tokens=cfg["max_output_tokens"])
+            if self.config.get('research_receipt_mode') == 'reference_v1':
+                return {'request_id': cfg['request_id'], 'transport_ref': str(tools.store.path('bounded_transports', cfg['request_id']).resolve())}
+            return transport
         if kind in {"research_prepare", "research"}:
             tools, cfg = self.tools(payload["request_id"])
             adapter = TaskResearchAdapter(cfg)
@@ -609,6 +663,18 @@ class TaskCompletionBackend:
                         if operator in feasible
                     ],
                 }
+                if cfg.get("relation_operator"):
+                    operator = cfg["relation_operator"]
+                    if operator not in tools.domain_policy["rule_operators"]:
+                        raise PermissionError("contextual selection requires a feasible registered operator")
+                    gates = tools.domain_policy.get("relation_admission", {})
+                    selection = tools.research_relation_admission(
+                        cfg["result_ids"], legal_repairs=[operator],
+                        selection_id=cfg["request_id"],
+                        technical_admitted=gates.get("technical_admitted") is True,
+                        data_admitted=gates.get("data_admitted") is True)
+                    if selection["action"] != "prepare":
+                        return {"action": "defer", "request_count": 0, "relation_admission": selection}
                 transport = adapter.prepare_request(
                     tools,
                     request_id=cfg["request_id"],
@@ -616,6 +682,10 @@ class TaskCompletionBackend:
                     max_input_tokens=cfg["max_input_tokens"],
                     max_output_tokens=cfg["max_output_tokens"],
                 )
+                if self.config.get('research_receipt_mode') == 'reference_v1':
+                    tools.store.put('research_preflights', cfg['request_id'], preflight)
+                    return {'request_id': cfg['request_id'], 'transport_ref': str(tools.store.path('bounded_transports', cfg['request_id']).resolve()),
+                            'preflight_ref': str(tools.store.path('research_preflights', cfg['request_id']).resolve())}
                 return {"transport": transport, "preflight": preflight}
             from rsi_vla.bounded_runner import execute
 
@@ -663,7 +733,9 @@ class TaskCompletionBackend:
         if kind == "development_base_collect":
             from rsi_vla.adapters.runtime_acceptance import inspect_attempt
 
-            audit = inspect_attempt(payload["output_ref"], require_vla=True)
+            audit = inspect_attempt(payload["output_ref"], require_vla=True,
+                                    evaluation_ref=payload.get("evaluation_revision_ref"),
+                                    evaluation_store_ref=self.evaluations.root if payload.get("evaluation_revision_ref") else None)
             atomic_json(payload["audit_ref"], audit)
             if payload.get("relation_evidence_ref"):
                 from rsi_vla.relation_evidence import review_skill_feedback
@@ -681,6 +753,8 @@ class TaskCompletionBackend:
                 payload["output_ref"],
                 result_id=payload["result_id"],
                 audit_path=payload["audit_ref"],
+                evaluation_ref=payload.get("evaluation_revision_ref"),
+                evaluation_store_ref=self.evaluations.root if payload.get("evaluation_revision_ref") else None,
             )
             if payload.get("relation_evidence_ref"):
                 from rsi_vla.relation_evidence import attach_skill_feedback
