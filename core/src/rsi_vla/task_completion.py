@@ -41,6 +41,11 @@ ACTION_ROLES = {
 }
 
 
+from .framework_operations import ROLES as FRAMEWORK_ROLES
+
+ACTION_ROLES.update(FRAMEWORK_ROLES)
+
+
 class TaskResearchAdapter(BoundedResearchAdapter):
     """Keep the bounded schema and register one or two permitted development slots."""
 
@@ -229,18 +234,27 @@ class TaskCompletionBackend:
         cfg = next(
             r for r in self.config["research_requests"] if r["request_id"] == request_id
         )
-        job = ResearchJob(
-            self.store,
-            cfg["job_id"],
-            cfg.get("base_bundle_id", self.config.get("base_bundle_id")),
-            cfg.get("job_limits"),
+        from .version_binding import start_research_job
+        manager = None
+        if self.config.get("research_release_root"):
+            from .release import ReleaseManager
+            manager = ReleaseManager(self.config["research_release_root"], self.store, self.evaluations)
+        job = start_research_job(
+            self.store, cfg["job_id"],
+            bundle_id=cfg.get("base_bundle_id", self.config.get("base_bundle_id")),
+            limits=cfg.get("job_limits"), release_manager=manager,
+            scope=self.config.get("research_policy_scope"),
         )
         tools = ResearchTools(
             self.store,
             job,
             self.protocol,
             domain_policy=read(cfg["domain_policy_ref"]),
+            public_feedback_root=self.evaluations.root / "public_feedback",
         )
+        feedback_ids = cfg.get("public_feedback_ids", [])
+        if feedback_ids:
+            tools.domain_policy["public_regression_feedback"] = tools.query_public_feedback(feedback_ids)
         return tools, cfg
 
     def preserve_development_views(self, results):
@@ -460,6 +474,9 @@ class TaskCompletionBackend:
 
     def execute(self, op, inputs):
         kind, payload = self.registered(op)
+        if kind in FRAMEWORK_ROLES:
+            from .framework_operations import execute
+            return execute(self, kind, payload, operation_id=op["operation_id"])
         if kind == "development_reparse":
             self.authority()
             from rsi_vla.development_reparse import reparse_development_attempt
@@ -637,6 +654,26 @@ class TaskCompletionBackend:
             adapter = TaskResearchAdapter(cfg)
             if kind == "research_prepare":
                 from rsi_vla.research_preflight import operator_preflight
+
+                psi = tools.store.get("psi", tools.base.psi_ref)
+                if psi.get("research_rule_plugin"):
+                    # This is the bound program, not a model-supplied command.
+                    # Its selection never bypasses the existing preflight/permit.
+                    decision = tools.run_inherited_research_rule(
+                        cfg["request_id"] + "-psi-selection",
+                        inputs={"evidence_available": bool(tools.query_development(cfg["result_ids"])),
+                                "budget_available": tools.job.state["status"] == "running"},
+                        config=self.config,
+                        timeout_seconds=cfg.get("research_rule_timeout_seconds", 3),
+                    )
+                    selection = decision.get("selection")
+                    if not decision["technical_valid"] or selection is None:
+                        return {"action": "defer", "request_count": 0,
+                                "reason": "research_rule_technical_unknown", "policy_decision": decision}
+                    if selection["action"] != "bounded_experiment":
+                        return {"action": selection["action"], "request_count": 0,
+                                "next_action": "prepare_evidence_followup" if selection["action"] == "inspect_evidence" else "defer",
+                                "policy_decision": decision}
 
                 self.preserve_development_views(tools.query_development(cfg["result_ids"]))
                 preflight = operator_preflight(

@@ -99,6 +99,7 @@ class EnvState:
     def __init__(self, output_dir: Path | str):
         self._output_dir = Path(output_dir)
         self._artifact_lock = threading.Lock()
+        self.media_policy = None
         self.reset()
 
     # -- private file resolution -----------------------------------------
@@ -204,12 +205,26 @@ class EnvState:
         with self._artifact_lock:
             step = self._resolve_read_step(step)
             destination = self._artifact_file(name, step)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self._temporary_file(destination)
-            suffix = destination.suffix.lower()
             record: StepRecord | None = (
                 self._record_for(step) if step is not None else None
             )
+            if (
+                self.media_policy is not None
+                and record is not None
+                and (
+                    record.terminated
+                    or record.truncated
+                    or record.extras.get("audit_required")
+                )
+            ):
+                self.media_policy.protect_step(step)
+            if self.media_policy is not None and not self.media_policy.select(
+                name, step
+            ):
+                return None
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._temporary_file(destination)
+            suffix = destination.suffix.lower()
             try:
                 if suffix in _IMAGE_SUFFIXES:
                     array = np.asarray(value)
@@ -248,7 +263,13 @@ class EnvState:
                     temporary.write_bytes(bytes(value))
                 else:
                     raise ValueError(f"unsupported artifact suffix: {suffix}")
+                if self.media_policy is not None and not self.media_policy.admit(
+                    name, step, temporary, destination
+                ):
+                    return None
                 os.replace(temporary, destination)
+                if self.media_policy is not None:
+                    self.media_policy.materialized(name, step, destination)
                 if record is not None:
                     record.artifacts.add(name)
                 else:

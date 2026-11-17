@@ -5,6 +5,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from rsi_vla.protocol10_roles import (
@@ -32,6 +33,8 @@ class DeploymentRuntimeIsolationTests(unittest.TestCase):
             isolation_task_root=str(f.task),
             protocol_ref=str(f.target_ref),
             release_root=f.domains["release"],
+            research_store_ref=f.domains["research"],
+            evaluation_store_ref=f.domains["evaluation"],
             runtime_slots=[
                 dict(run_id="baseline", output_ref=str(f.base_raw.parent)),
                 dict(run_id="candidate", output_ref=str(f.raw.parent)),
@@ -63,9 +66,9 @@ class DeploymentRuntimeIsolationTests(unittest.TestCase):
             ref = Path(argv[argv.index("--request") + 1])
             request = json.loads(ref.read_text())
             atomic_json(request["receipt_ref"], dict(request=request, role="runtime", value={"status": "completed"}))
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            return SimpleNamespace(returncode=0, communicate=lambda: ("", ""))
 
-        with patch("rsi_vla.protocol10_roles.subprocess.run", side_effect=returned):
+        with patch("rsi_vla.protocol10_roles.subprocess.Popen", side_effect=returned):
             result = run_role(self.config, self.task)
         self.assertEqual(result["role"], "runtime")
         mounts = [captured[index + 1] for index, value in enumerate(captured) if value == "--ro-bind"]

@@ -1,8 +1,8 @@
 # 本轮离线交付检查
 
-**GPU 选择说明：** 后续执行按 [04 的当前 GPU 选择规则](../项目文档/04_实施路线与待决事项.md) 自主选择可用设备。本文历史卡号、固定卡号方案和当时未换卡的记录仅用于说明已有证据，不约束后续选卡；原始产物与实际设备记录保留。
+**GPU 选择说明：** 后续执行按 [04 的当前 GPU 选择规则](../项目文档/04_实施路线与执行状态.md) 自主选择可用设备。本文历史卡号、固定卡号方案和当时未换卡的记录仅用于说明已有证据，不约束后续选卡；原始产物与实际设备记录保留。
 
-§1—4 是 2026-11-09 原离线交付记录；本轮增量见 §5。日期：2026-11-09。对应 04 §1.3 第 1—3 项。全部是静态/离线证据，无新模型请求、下载、安装、训练、GPU、仿真或设备操作。
+当前批次为第四批，入口见[04 §1.23](../项目文档/04_实施路线与执行状态.md#123-第四批仿真验收与准备2026-11-17)，本批检查见§37。§1—4 是 2026-11-09 原离线交付记录；该次增量见 §5。日期：2026-11-09。对应 04 §1.3 第 1—3 项。全部是静态/离线证据，无新模型请求、下载、安装、训练、GPU、仿真或设备操作。
 
 ## 1. 实现与证据位置
 
@@ -271,7 +271,7 @@ Sphinx 仍缺已登记构建器，未安装，RST仅做源码和配对内容检�
 
 ## 13. 2026-11-12 冻结收尾与GPU0准入停止
 
-证据根：[bounded-20261112-5a-pilot-01](../artifacts/bounded-20261112-5a-pilot-01/)。新协议/profile/policy为 `*_5a_frozen_20261112_pilot01.json`，历史草案原件保留；状态唯一入口为04 §1.17，实际方案为06本轮冻结方案。
+证据根：[bounded-20261112-5a-pilot-01](../artifacts/bounded-20261112-5a-pilot-01)。新协议/profile/policy为 `*_5a_frozen_20261112_pilot01.json`，历史草案原件保留；状态唯一入口为04 §1.17，实际方案为06本轮冻结方案。
 
 | 定向检查 | 结果与证据 |
 |---|---|
@@ -296,7 +296,7 @@ Sphinx 仍缺已登记构建器，未安装，RST仅做源码和配对内容检�
 
 ## 14. 2026-11-12 GPU阈值修订与真实有限Research/开发停止
 
-证据根：[bounded-20261112-5a-pilot-02](../artifacts/bounded-20261112-5a-pilot-02/)，round-summary.json为程序事实汇总；唯一状态在04 §1.17，方案在06末节。
+证据根：[bounded-20261112-5a-pilot-02](../artifacts/bounded-20261112-5a-pilot-02)，round-summary.json为程序事实汇总；唯一状态在04 §1.17，方案在06末节。
 
 - 复用§13有效检查：进入pilot02时，原74文件逐字节一致，未重跑未变化全套；新增协议身份和profile引用静态检查通过，新源码快照77文件，见prepare-checks.json。
 - 新prepare、实际prompt/full237 L0与历史正式store、唯一hint预检、phase/job完整余额、源码及两个单作业permit全部核对，见research-preflight.json、development-preflight.json、两个dry-run记录。实际prompt237778字节/237778字符；token使用真实HTTP usage另记。
@@ -313,7 +313,7 @@ Sphinx 仍缺已登记构建器，未安装，RST仅做源码和配对内容检�
 
 ## 15. 2026-11-12 后续Research high、账号来源与启动故障定位
 
-证据根：[offline-20261112-research-high-diagnosis](../artifacts/offline-20261112-research-high-diagnosis/)。本轮是配置修改和离线诊断，未执行Research、Planner、Runtime、仿真/GPU或模型加载，没有改认证文件或阶段账。
+证据根：[offline-20261112-research-high-diagnosis](../artifacts/offline-20261112-research-high-diagnosis)。本轮是配置修改和离线诊断，未执行Research、Planner、Runtime、仿真/GPU或模型加载，没有改认证文件或阶段账。
 
 - 后续Research请求工厂默认gpt-6.1-sol/high，new prepare及dispatch拒绝medium；SDK effort、permit与gate context同步high。旧medium响应允许离线解析。Planner medium及其审计/机会依据保持；原冻结配置/permit/运行原件保留，新暂停profile/protocol只改Research effort和必要新身份/准入元数据。
 - 11项定向unittest通过：默认high请求/合法证据、历史medium解析且禁止新medium、observed-only请求/成本/可信transport、结构化提案、RunnerTest四项（含实际SDK effort离线替身、medium输入拒绝及单次费用）、经验/hint入口。命令与结果索引见verification.json；无真实模型调用。
@@ -328,7 +328,7 @@ Sphinx 仍缺已登记构建器，未安装，RST仅做源码和配对内容检�
 
 ## 16. 2026-11-12 原生动作合约修复与repair03真实开发
 
-证据根：[bounded-20261112-5a-repair-03](../artifacts/bounded-20261112-5a-repair-03/)。状态唯一入口为04 §1.17，具体许可/方案见06末节。
+证据根：[bounded-20261112-5a-repair-03](../artifacts/bounded-20261112-5a-repair-03)。状态唯一入口为04 §1.17，具体许可/方案见06末节。
 
 - 复用add-robot的薄适配：新增robots/libero/action_spec.py在原生worker factory构造后提取实际合约，沿支持的get_env_attr读取；不编辑RLinf/robosuite、不替换控制循环。固定task/controller元数据跨普通reset保留，不新增任务reconfigure支持。Runtime源码快照纳入新helper。
 - 14项pytest定向检查通过：两种原生controller布局、facade RPC/getattr、缺失合约拒绝、任务/seed选取、初始化失败成本关闭、正式采集缓存合约保存；原task-selection fixture改为真实class形状以匹配生产构造契约，原身份/边界断言全部保留。preview lint、format及core错误lint通过。
@@ -346,7 +346,7 @@ verification-records.json保存命令与结果；source/source-manifest是调度
 
 ## 17. 2026-11-12 原生成功后的模型准入/流收尾离线修复
 
-证据根：[offline-20261112-native-stream-closure](../artifacts/offline-20261112-native-stream-closure/)。本轮无新模型请求、仿真/GPU、运行许可、训练或阶段账消费；真实repair03保持原判。
+证据根：[offline-20261112-native-stream-closure](../artifacts/offline-20261112-native-stream-closure)。本轮无新模型请求、仿真/GPU、运行许可、训练或阶段账消费；真实repair03保持原判。
 
 | 检查 | 结果 |
 |---|---|
@@ -367,7 +367,7 @@ verification-records.json保存命令与结果；source/source-manifest是调度
 
 ## 18. 2026-11-12 repair04新冻结与GPU准入停止
 
-证据根：[bounded-20261112-5a-repair-04](../artifacts/bounded-20261112-5a-repair-04/)。唯一状态在04 §1.17，授权范围与停止规则在06末节。
+证据根：[bounded-20261112-5a-repair-04](../artifacts/bounded-20261112-5a-repair-04)。唯一状态在04 §1.17，授权范围与停止规则在06末节。
 
 | 检查 | 结果 |
 |---|---|
@@ -388,7 +388,7 @@ verification-records.json保存命令与结果；source/source-manifest是调度
 
 ## 19. 2026-11-12 repair05唯一开发技术有效、关键推进审计停止
 
-证据根：[bounded-20261112-5a-repair-05](../artifacts/bounded-20261112-5a-repair-05/)。唯一状态在04 §1.17，协议与GPU范围变更见06末节。用户允许GPU0/1任选一张，原其它作业显存阈值和全部限额保持。
+证据根：[bounded-20261112-5a-repair-05](../artifacts/bounded-20261112-5a-repair-05)。唯一状态在04 §1.17，协议与GPU范围变更见06末节。用户允许GPU0/1任选一张，原其它作业显存阈值和全部限额保持。
 
 | 检查 | 结果 |
 |---|---|
@@ -428,7 +428,7 @@ per-request-closure.json、native-stream-closure-check.json、hint-and-screening
 
 ## 20. 2026-11-12 repair05实际读取审计、不可变重解析与首次release停止
 
-唯一状态和完整费用在04 §1.17，派生release协议在06末节。证据根：[offline-20261112-repair05-audit-closure](../artifacts/offline-20261112-repair05-audit-closure/) 和 [release-20261112-repair05-seed3](../artifacts/release-20261112-repair05-seed3/)。不新增Research/诊断/总结请求、development Runtime、子代理或提交/推送。
+唯一状态和完整费用在04 §1.17，派生release协议在06末节。证据根：[offline-20261112-repair05-audit-closure](../artifacts/offline-20261112-repair05-audit-closure) 和 [release-20261112-repair05-seed3](../artifacts/release-20261112-repair05-seed3)。不新增Research/诊断/总结请求、development Runtime、子代理或提交/推送。
 
 | 检查 | 实际证据与结果 |
 |---|---|
@@ -455,7 +455,7 @@ per-request-closure.json、native-stream-closure-check.json、hint-and-screening
 
 ## 21. 2026-11-13 SDK 收尾、三态 Gate 与 release06 完整后续
 
-唯一状态见04 §1.17，协议见06末节。证据根：[离线收尾](../artifacts/offline-20261113-release06-closure/)、[全新 release06](../artifacts/release-20261113-repair05-seed3-sdk06/)。使用既有 Python3.11.13，不安装依赖。主代理＋3直接gpt-6.1-sol/high编程子代理，无继续委派；各自文件/临时数据分离，真实账/许可/GPU/Runtime仅主代理操作。一次已完成子代理只读关键复核后，owner修复了预算拒绝SDK/L0关联和启动缺证的已测费用保留；歧义工具费用通过真实_phase_charge临时账进入unresolved，不传None造成算术异常。
+唯一状态见04 §1.17，协议见06末节。证据根：[离线收尾](../artifacts/offline-20261113-release06-closure)、[全新 release06](../artifacts/release-20261113-repair05-seed3-sdk06)。使用既有 Python3.11.13，不安装依赖。主代理＋3直接gpt-6.1-sol/high编程子代理，无继续委派；各自文件/临时数据分离，真实账/许可/GPU/Runtime仅主代理操作。一次已完成子代理只读关键复核后，owner修复了预算拒绝SDK/L0关联和启动缺证的已测费用保留；歧义工具费用通过真实_phase_charge临时账进入unresolved，不传None造成算术异常。
 
 - A：保存真实SDK generic429形状、通知error/failed/exception顺序、同步/异步inflight写入排空、超时/清理错误保留、错误身份/标记/媒体/L0/usage反例；RequestGate12项仅loopback、独立closure12子场景、原生/预算27项及后续实际drain回归通过。详见 [A验证索引](../artifacts/offline-20261113-release06-closure/verification/A/verification.json)，重叠用例未叠加。
 - B：最终15工具审计＋3Gate＋10evaluator＋29core＋17batch4/assets＋3budget，共77不同离线用例通过；精确命令/复用范围在 [B索引](../artifacts/offline-20261113-release06-closure/verification/B/validation-commands.txt)。已确认违规跨缺槽保留，一般技术错误/缺配置不伪造safety/compatibility失败。
@@ -489,8 +489,8 @@ per-request-closure.json、native-stream-closure-check.json、hint-and-screening
 当前状态唯一入口04 §1.17：8正式槽、8实际启动、0技术恢复、0未启动，独立Gate=reject，③已闭环，动态暂停。起点A=True，资格B=True；比较与部署资格分开，④未执行。
 
 - `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests:RPent RPent/.venv/bin/python -m unittest test_pilot_scope test_release_preparation -v`：9方法通过；新scope/身份/预算/划分、8正式与10启动/2恢复/单槽1恢复及未知scope回退反例、历史scope、源Candidate成本时点/幂等。[主检查](../artifacts/release-20261113-repair05-seed3-compare08/verification/main-checks.json)。
-- `... python /tmp/run-release08-driver-check.py RPent/.venv/bin/python -m unittest test_release_driver.Release08DriverTest -v`：15方法全类通过；随后针对只读复核发现的确认关键推进违规遗漏，新增False→reject/None→inconclusive方法并连同2项现有选择/违规用例通过，共16个不同新增方法；历史8项复用前轮通过。包括A/B分文件、J=1完整候选、有效failure不恢复、8/10/2/1、恢复前清理/成本/GPU/permit、局部unknown继续、首个有效尝试、全部尝试费用与确认违规保留。原停止仅0启动且精确账项/清理例外可进入首次矩阵，任何已启动仍拒绝。[driver精确命令和日志](../artifacts/release-20261113-repair05-seed3-compare08/verification/driver/)。
-- `... RPent/.venv/bin/python -m unittest core.tests.test_release_comparison -v`：11方法通过；`... -m unittest core.tests.test_core core.tests.test_gate_tristate core.tests.test_evaluator -v`：42方法通过。覆盖能力失败可比但资格failed、技术缺证/旧能力标签unknown或冲突不放行、候选base与每项旧能力、三态与硬违规优先、comparison accept无法资格/激活/部署。[评价证据](../artifacts/release-20261113-repair05-seed3-compare08/verification/evaluation/)。
+- `... python /tmp/run-release08-driver-check.py RPent/.venv/bin/python -m unittest test_release_driver.Release08DriverTest -v`：15方法全类通过；随后针对只读复核发现的确认关键推进违规遗漏，新增False→reject/None→inconclusive方法并连同2项现有选择/违规用例通过，共16个不同新增方法；历史8项复用前轮通过。包括A/B分文件、J=1完整候选、有效failure不恢复、8/10/2/1、恢复前清理/成本/GPU/permit、局部unknown继续、首个有效尝试、全部尝试费用与确认违规保留。原停止仅0启动且精确账项/清理例外可进入首次矩阵，任何已启动仍拒绝。[driver精确命令和日志](../artifacts/release-20261113-repair05-seed3-compare08/verification/driver)。
+- `... RPent/.venv/bin/python -m unittest core.tests.test_release_comparison -v`：11方法通过；`... -m unittest core.tests.test_core core.tests.test_gate_tristate core.tests.test_evaluator -v`：42方法通过。覆盖能力失败可比但资格failed、技术缺证/旧能力标签unknown或冲突不放行、候选base与每项旧能力、三态与硬违规优先、comparison accept无法资格/激活/部署。[评价证据](../artifacts/release-20261113-repair05-seed3-compare08/verification/evaluation)。
 - 185文件源码逐字节/AST、错误类Ruff、两仓git diff --check通过。唯一只读复核指出critical_progress=False遗漏，修复与定向证据由主代理核准后重新冻结，运行后未混用源码。[准入](../artifacts/release-20261113-repair05-seed3-compare08/preflight.json)、[实际源码绑定](../artifacts/release-20261113-repair05-seed3-compare08/source-bindings.json)。
 - 独立评价修订v2：`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=artifacts/release-20261113-repair05-seed3-compare08/evaluation-revisions/v2/source/core/src:RPent RPent/.venv/bin/python -m unittest discover -s artifacts/release-20261113-repair05-seed3-compare08/evaluation-revisions/v2/tests -p test_read_text_audit_v2.py -v`，14项通过；仅副本read_text_audit.py变化。默认参数、null/非法值、截断、路径/身份/源码、read缺终态和非read缺终态无合法local-stop反例均覆盖。[修订与检查](../artifacts/release-20261113-repair05-seed3-compare08/evaluation-revisions/v2/source-manifest.json)。主代理对四起点正式重评后，用原冻结启动函数执行剩余候选，`PYTHONDONTWRITEBYTECODE=1 RPent/.venv/bin/python -u /tmp/release08_continue_matrix.py` 的保存源码见[主代理调度](../artifacts/release-20261113-repair05-seed3-compare08/operator-continuation.py)；未恢复旧Runtime。实际SDK/L0/finish/closure生产者未改，复用§20—22有效证据；本轮实际SDK故障/缺终态以逐请求及SDK报告记录，不补造。[全部尝试](../artifacts/release-20261113-repair05-seed3-compare08/SDK-L0-and-attempt-results.json)。
 - 主代理运行 `PYTHONDONTWRITEBYTECODE=1 RPent/.venv/bin/python -u scripts/run_release_comparison.py --plan artifacts/release-20261113-repair05-seed3-compare08/matrix-plan.json --execute`；逐次具体permit/只读GPU/单卡串行，程序独立evaluator/Gate统一评价，current=anchor同一完整新起点。A/B/比较Gate/部署许可分列，没有以子代理审查替代正式评价。[Gate](../artifacts/release-20261113-repair05-seed3-compare08/independent-gate.json)。
@@ -510,7 +510,7 @@ release08③完整reject及历史费用保持。下一任务默认完成③工�
 
 ## 25. 2026-11-13 deployment09 工程接线、OS验收与真实继承
 
-唯一当前状态见04 §1.17。产物根：[deployment09](../artifacts/initial-20261113-release08-deploy09/)。release08八槽保存事实经正式v2评价一致，Gate仍reject；可信起点导入、真实资格/OS边界/初始发布及真实继承分别验收，子代理报告或静态active读取没有替代动态证据。
+唯一当前状态见04 §1.17。产物根：[deployment09](../artifacts/initial-20261113-release08-deploy09)。release08八槽保存事实经正式v2评价一致，Gate仍reject；可信起点导入、真实资格/OS边界/初始发布及真实继承分别验收，子代理报告或静态active读取没有替代动态证据。
 
 - A在`/tmp/rsi-evaluation-resume`使用`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src /home/xzh/RSI-Agent-VLA/RPent/.venv/bin/python -m unittest discover -s core/tests -p 'test_read_text_audit*.py' -v`：17项通过，正式read模块与冻结v2字节相等。driver同命令以`-p test_release_driver.py`执行31项通过；之后仅针对实际receipt/version/完成槽/共享故障变化补测5项通过，存在重叠不叠加。早期隔离目录缺config两错、误替换历史评价一次失败均保留记录并修正；未将其算通过。[精确argv与计时](../artifacts/initial-20261113-release08-deploy09/verification/A/evidence.json)。
 - B在`/tmp/rsi-qualification-consumer`使用`/usr/bin/time -p env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests /home/xzh/RSI-Agent-VLA/RPent/.venv/bin/python -m unittest test_initial_deployment test_release_comparison test_release_preparation test_batch3.DeploymentTest test_5a_assets.QualificationTest -q`：21项通过；新增permit断言后仅运行`test_initial_deployment.InitialDeploymentTests.test_import_publish_and_real_cli_deployment_selection_preserve_source_identity`一项通过。初宽测33项中的3个既有错误在原源码精确复现：Research medium fixture两项、旧RuntimeConsumption缺初始资格一项；未弱化断言或修无关项。[完整命令](../artifacts/initial-20261113-release08-deploy09/verification/commands.json)、[B日志](../artifacts/initial-20261113-release08-deploy09/verification/B/focused-tests.log)。
@@ -525,14 +525,14 @@ release08③完整reject及历史费用保持。下一任务默认完成③工�
 
 ## 26. 2026-11-13 continuation10：计量、授权续用与protocol10
 
-当前状态统一见04 §1.17；证据根 [continuation10](../artifacts/continuation-20261113-protocol10/)。聚合根main与本地origin/main同步，独立RPent main领先2/落后2；已有staged逐字节与deployment09保存快照相等，无fetch/commit/push。只改聚合根core/scripts/config和拥有文档，未改RPent源码或既有staged。
+当前状态统一见04 §1.17；证据根 [continuation10](../artifacts/continuation-20261113-protocol10)。聚合根main与本地origin/main同步，独立RPent main领先2/落后2；已有staged逐字节与deployment09保存快照相等，无fetch/commit/push。只改聚合根core/scripts/config和拥有文档，未改RPent源码或既有staged。
 
 - 主定向组：process accounting3、续用3、旧initial4、supervisor8共18不同方法通过；unittest因导入旧fixture类重复执行其中4方法，原输出22，不重复累计。首组子进程exit0后，工具外层清理/tmp/.aws报错；单列工具错误，不重跑成功检查。
 - 增量6方法通过：实际计量CLI完整子进程/重复拒绝/幂等续程，新scope permit写域，既有driver评价暂停/末评价续程/未知提交拒绝/已扣费checkpoint恢复。之后授权来源责任改变，仅重验续用5方法及5B实际CLI限额1方法；新scratch重定向只重验实际CLI1方法。迟到评价文件费用修复后只验新增1方法与受影响driver2/supervisor1。以上集合有重叠。
 - 新protocol10原14方法通过，新增Runtime适配3方法通过；包括真实prepare_runtime的隔离CPU dry-run（fixture关闭assets/collection，非真实资产准入）。实际CLI用现余额退出2，未写准备根。此前成功方法未重复运行。
 - 新scope 5角色实际bwrap允许/拒绝探针均exit0，旧active/授权、源码、父链与其他角色域只读；无GPU或模型。授权过期和新授权合法续用由隔离回归验证，未签发正式新续用授权/permit。
 - Ruff错误类、两仓git diff --check与staged保持检查通过；完整命令/墙钟/返回码见[主回执](../artifacts/continuation-20261113-protocol10/verification/main-command-receipts.json)、[协议原检查](../artifacts/continuation-20261113-protocol10/protocol-design/verification.json)、[新实际消费者](../artifacts/continuation-20261113-protocol10/protocol-design/runtime-hook-verification.json)。核心测试共44不同方法，不把重叠执行数相加。
-- 5B只读本地metadata/资产与真实CPU原生配置，后者16.667945秒；未读取不合格batch。固定两个episode主体、公开许可声明与具体命令/包络见[data qualification](../artifacts/continuation-20261113-protocol10/data-qualification/)。
+- 5B只读本地metadata/资产与真实CPU原生配置，后者16.667945秒；未读取不合格batch。固定两个episode主体、公开许可声明与具体命令/包络见[data qualification](../artifacts/continuation-20261113-protocol10/data-qualification)。
 
 项目Runtime/Research新消费均0，编程token_count单列。完整命令与外层回执可恢复部分已补记；历史完整实际、bootstrap存储及采样间已删除fixture字节仍null。存储是跨明确写域的采样阈值与逻辑增长下界，记录overshoot和峰值，清理不退历史费用；不称内核硬配额。阶段只追加有据费用，不改变原limits，真实总量精度见accounting.json。
 
@@ -540,7 +540,7 @@ release08③完整reject及历史费用保持。下一任务默认完成③工�
 
 ## 27. 2026-11-13 protocol10 可恢复阶段协调第一批离线交付
 
-当前状态由 [04 §1.17](../项目文档/04_实施路线与待决事项.md#117-5a-数据经验有限往返与资格准备2026-11-13) 维护，本节只记本批验证。工作目录 `/home/xzh/RSI-Agent-VLA`，解释器 `/home/xzh/RSI-Agent-VLA/RPent/.venv/bin/python` 3.11.13，`PYTHONPATH=core/src:core/tests`；core 与 RPent 实际导入均来自该工作区。聚合 `main/c4d7fd9b`、RPent `main/c57b1345` 的已有未提交工作保留；Autoloop 只读参考 HEAD 为 `c9ec4a187cab49627947e7e33db265ec143db3b8`，开始时工作树干净。
+当前状态由 [04 §1.17](../项目文档/04_实施路线与执行状态.md#117-5a-数据经验有限往返与资格准备2026-11-13) 维护，本节只记本批验证。工作目录 `/home/xzh/RSI-Agent-VLA`，解释器 `/home/xzh/RSI-Agent-VLA/RPent/.venv/bin/python` 3.11.13，`PYTHONPATH=core/src:core/tests`；core 与 RPent 实际导入均来自该工作区。聚合 `main/c4d7fd9b`、RPent `main/c57b1345` 的已有未提交工作保留；Autoloop 只读参考 HEAD 为 `c9ec4a187cab49627947e7e33db265ec143db3b8`，开始时工作树干净。
 
 新增代码为 `protocol10_coordinator.py`、`protocol10_backend.py` 和 `scripts/run_protocol10.py`；现有 ResearchTools/research_cycle、Runtime 协议投影及全部尝试费用/违规汇总做必要接线。汇总 helper 从 release08 脚本移到 evaluation，历史脚本仍导入同名函数；没有把 release08 driver 扩为通用工作流。
 
@@ -578,7 +578,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src RPent/.venv/bin/python -m pytest c
 
 ## 28. 2026-11-13 protocol10 第二批补正与生产角色验证
 
-唯一当前状态及授权缺口见 [04 §1.17](../项目文档/04_实施路线与待决事项.md#117-5a-数据经验有限往返与资格准备2026-11-13)。本节为证据索引，证据根 `artifacts/continuation-20261113-protocol10/batch2/verification/`，source、配置和未签发 permit 在同级 `operator/`。聚合 `main/c4d7fd9b`、RPent `main/c57b1345` 及其既有工作树修改保持；解释器为 RPent/.venv/bin/python 3.11.13，实际导入为本工作区 core/src/rsi_vla 与 RPent/rpent。未提交、推送、安装、下载或运行真实训练/模型/GPU。
+唯一当前状态及授权缺口见 [04 §1.17](../项目文档/04_实施路线与执行状态.md#117-5a-数据经验有限往返与资格准备2026-11-13)。本节为证据索引，证据根 `artifacts/continuation-20261113-protocol10/batch2/verification/`，source、配置和未签发 permit 在同级 `operator/`。聚合 `main/c4d7fd9b`、RPent `main/c57b1345` 及其既有工作树修改保持；解释器为 RPent/.venv/bin/python 3.11.13，实际导入为本工作区 core/src/rsi_vla 与 RPent/rpent。未提交、推送、安装、下载或运行真实训练/模型/GPU。
 
 | 检查 | 结果及证据 |
 | --- | --- |
@@ -601,7 +601,7 @@ OS链的临时 phase 数字属于 offline fixture：18 episodes/19 requests/18 t
 
 ## 29. 2026-11-13 protocol10 第三批入口、候选升级桥接与正式资源准入
 
-唯一当前状态见 [04 §1.17](../项目文档/04_实施路线与待决事项.md#117-5a-数据经验有限往返与资格准备2026-11-13)。证据根 `artifacts/continuation-20261113-protocol10/batch3/`。本轮新增明确授权已先记录，再幂等应用精确amendment与独立离线scope；聚合main/c4d7fd9b、RPent main/c57b1345及用户既有工作树修改保留，无commit/push。解释器为RPent/.venv/bin/python 3.11.13，导入实际来自core/src/rsi_vla与RPent/rpent。
+唯一当前状态见 [04 §1.17](../项目文档/04_实施路线与执行状态.md#117-5a-数据经验有限往返与资格准备2026-11-13)。证据根 `artifacts/continuation-20261113-protocol10/batch3/`。本轮新增明确授权已先记录，再幂等应用精确amendment与独立离线scope；聚合main/c4d7fd9b、RPent main/c57b1345及用户既有工作树修改保留，无commit/push。解释器为RPent/.venv/bin/python 3.11.13，导入实际来自core/src/rsi_vla与RPent/rpent。
 
 | 检查 | 证据与结果 |
 | --- | --- |
@@ -638,7 +638,7 @@ OS链的临时 phase 数字属于 offline fixture：18 episodes/19 requests/18 t
 
 ### §30 新任务政策、分段准入与探索准备
 
-2026-11-13。方案与未启用项见[04 §5.4](../项目文档/04_实施路线与待决事项.md#54-任务政策与历史比较的作用域)，接口见[README](README.md#新任务的分段准入与探索准备)。聚合分支 main/c4d7fd9b，与本地 origin/main 同位，未联网 fetch；RPent 自身 main 与本地 origin/main 为领先2/落后2。保留进入任务时全部未提交改动；本轮不改真实 phase、permit、正式结果或 active，不启动模型、GPU/仿真、训练或下载。
+2026-11-13。方案与未启用项见[04 §5.4](../项目文档/04_实施路线与执行状态.md#54-任务政策与历史比较的作用域)，接口见[README](README.md#新任务的分段准入与探索准备)。聚合分支 main/c4d7fd9b，与本地 origin/main 同位，未联网 fetch；RPent 自身 main 与本地 origin/main 为领先2/落后2。保留进入任务时全部未提交改动；本轮不改真实 phase、permit、正式结果或 active，不启动模型、GPU/仿真、训练或下载。
 
 源码先在 `/tmp/rsi-policy-adjustment` 准备，并保留 `before/` 原字节。回写前逐文件核对原字节，仅应用本轮增量。新文件为 `task_policy.py`、`prepare_task_stage.py` 与 `test_task_policy.py`；消费者变更覆盖 `admit_resources/baseline_readiness`、Research preflight/请求/规则计划/开发槽、完整事实传输和 GPU 查询。协议10的冻结配置和生产注册未修改。
 
@@ -656,7 +656,7 @@ OS链的临时 phase 数字属于 offline fixture：18 episodes/19 requests/18 t
 
 ### §31 适度检查与执行流畅性优化
 
-2026-11-13。复核与实施原则见[04 §5.1](../项目文档/04_实施路线与待决事项.md#51-任务提示词编写参考)及§5.4末段。确认历史审计误判与暂停范围失当；不把来源留存、费用记录或跨权限边界的重复核对一概认定为多余。本轮采用局部实现与已有执行指引，未新增审批框架或检查平台。
+2026-11-13。复核与实施原则见[04 §5.1](../项目文档/04_实施路线与执行状态.md#51-任务提示词编写参考)及§5.4末段。确认历史审计误判与暂停范围失当；不把来源留存、费用记录或跨权限边界的重复核对一概认定为多余。本轮采用局部实现与已有执行指引，未新增审批框架或检查平台。
 
 - 新任务和技术诊断的解释数量最小为1，仍须有完整解释、预测和区别测试，拒绝空、重复及无测试内容。普通历史请求及protocol10保留2；请求保存minimum_hypotheses，CLI与实际SDK准备按保存请求生成schema。后续策略变化不改变旧请求的消费要求。诊断仍不能直接作为行为试验前提。
 - 新任务research_branches保留可检验criterion，允许缺evaluation_ref时准备研究；字段返回None明确待补，独立评价、Gate和发布消费者未放宽。
@@ -735,7 +735,7 @@ scope实际Runtime19、project上游144（Planner medium142、Research high2）�
 
 ### §33 framework15 近期框架消费者与有界真实集成（2026-11-15）
 
-当前状态由[项目04](../项目文档/04_实施路线与待决事项.md#framework15近期框架优化实施中2026-11-15)维护；实现入口见[core README](README.md#新任务的实际执行与研究消费者)。本条保存验证依据，完整命令、原失败和定点复验见[validation/summary](../artifacts/framework15-20261115/validation/summary.json)，原始模型/仿真及资源见[delivery](../artifacts/framework15-20261115/delivery.json)。
+当前状态由[项目04](../项目文档/04_实施路线与执行状态.md#framework15近期框架优化交付2026-11-15)维护；实现入口见[core README](README.md#新任务的实际执行与研究消费者)。本条保存验证依据，完整命令、原失败和定点复验见[validation/summary](../artifacts/framework15-20261115/validation/summary.json)，原始模型/仿真及资源见[delivery](../artifacts/framework15-20261115/delivery.json)。
 
 - core完整离线命令为 PYTHONPATH=core/src:RPent PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES= RPent/.venv/bin/python -m unittest discover -s core/tests -v。宿主环境原663项出现6个失败：旧φ算子fixture2项、旧ExperimentResult fixture2项、namespace子进程导入路径1项、宿主清理deadline1项。前五项补齐真实fixture契约并保留断言，分别定点2/2/1项通过；cleanup修复在原1.5秒断言下4项通过。另新增实际反馈消费者回归1项通过。先前通过结果按前提复用，没有重复整个套件。
 - RPent的LIBERO、session、planner、tools、robots调用方扩大检查原956通过/3失败/1跳过；补齐既有Env.terminated与RuntimeJournal fixture后6个受影响参数案例通过，最终959个唯一案例有有效通过证据、1跳过。未放宽断言。缺pytest-timeout仅产生配置/标记警告。
@@ -744,3 +744,303 @@ scope实际Runtime19、project上游144（Planner medium142、Research high2）�
 - 固定来源239帧真实CPU batch已通过，不是真实训练。θ×B实际prepare_runtime及run/episode/版本绑定回归通过，未知θ1阻断、fallback显式、生产Gate保留。初始有效ψ、事实分离和合法历史回放均有消费回执。
 - D/S/R/A的base_salad/seed0均原生success且独立通过。D原技术失败、唯一恢复、先前未提交控制失败及旧/新评价完整保留；S只在首技能达成原生终态，R实际发生公开状态分支。单槽、调用粒度/媒体节奏及随机性限制使本批不能支持E1净收益、训练收益、F2或H3。
 - 受影响RPent文件Ruff检查/格式、core新入口及语法检查、双Git diff --check、Markdown链接/接口静态核对通过。没有请求PR，未跑全仓修改式pre-commit；未改Sphinx页面或构建输入，不追加双语构建。Python矩阵未由本机3.11.13替代。
+
+<a id="34-f00f04-第一批工程验证2026-11-17"></a>
+
+## 34. F00—F04 第一批工程验证（2026-11-17）
+
+本批只实施F00—F04，状态由[04 §1.20](../项目文档/04_实施路线与执行状态.md#120-f00f04-第一批工程交付2026-11-17)维护；默认实现/owner/输入输出/消费者/F05—F16缺口见[01 §3.3](../项目文档/01_系统设计与框架复用.md#33-f00-实现与依赖清点2026-11-17)。基于聚合 `main/3dbc59ad608221ddbdae6c5cf2a45d11b4eb4756` 与 RPent `main/c57b134577dde2cc62cbdf967b28d839fc11cb14` 的完整原工作树；原有文档、LIBERO、Planner、Runtime和暂存IDE文件保留。本轮没有fetch/pull/reset/clean/stash、提交或发布。聚合本地origin/main等于HEAD（本地reflog最后更新2026-11-16）；RPent本地origin/main为`01e9cb370dfcefda24d0616db069108b03db75d6`，ahead2/behind2。未查询远端最新状态。
+
+环境为RPent既有CPython3.11.13，RPent0.1.0当前源码；RLinf0.4.0安装commit `2348ece3df113874671478be1360ae3115b346e3`、rpent-openpi0.2.2安装commit `a560f4dd8205b8423ecd4c8a0fabb5f54140b8a0`。只读`find_spec`和distribution/direct_url元数据，无模型加载或安装。真实bwrap0.4.0通过宿主运行；受限开发sandbox的NETLINK_ROUTE EPERM是环境权限限制，提升到本轮已授权宿主执行后真实验收成功。真实Autoloop复用既有Node24.11.1二进制，不修改其来源的旧暂停任务目录。
+
+### 源码和消费者证据
+
+- F01：`version_binding.bundle_references/research_binding`、实际`bounded_runner.validate_permit`、`runtime.prepare_runtime/execute_runtime`，RPent实际`RuntimeJournal`；旧RunBundle无必填新字段。运行前核对profile/θ/processor/norm/规则，实际journal拒绝规则漂移并保持旧运行规则；loader路径、配置、动作合约继续由既有`runtime_acceptance`/midterm bindings/qualification消费者核验。旧请求可读，新请求策略变化不回写旧输入。
+- F02：复用Coordinator、TaskContinuation、业务Store和Host权威；真实原生回执丢失后只对账，不再执行；缺原生结果保持unknown，人工暂停后timer不推进；有效failure、defer、reject/inconclusive和技术故障分开。费用、operation、原attempt及恢复身份保留。
+- F03：`host_inputs.materialize_inputs/consumer_inputs`从真实前驱原回执绑定scope/版本/终态/清理/actual/允许字段和实际写域，生成不可冲突覆盖的独立后继输入。`cpu_command`与实际supervisor分别核验CPU许可；`cpu_operation`接七类已有消费者，配置工厂/工程probe已接，六类native fixed families保留。全局wall实耗和强制预留接账，预留按scope/operation较大值计算一次，不退款或把unknown补0。
+- F04：实际`run_operator/run_role`消费hidden_paths/read_grants与审核公开协议；实际Backend和prepare_runtime在隔离进程消费公开tasks/task_sets，可信evaluation读取私有原件。候选执行仅固定注册Python接口、输入、输出和期限；empty-root、独立网络/PID、私有/dev、无broker/认证/发布域，超时清理和不明启动拒绝重提。完整候选生成留F07。
+
+### 检查命令与结果
+
+除RPent行外，从聚合根使用前缀：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests:RPent RPent/.venv/bin/python -m unittest
+```
+
+真实进程/namespace/loopback项在允许本地socket与namespace的宿主环境执行。下表按命令组报告，不将重叠案例加总为独立样本。
+
+| 检查 | 命令后缀/入口与结果 | 本地日志 |
+| --- | --- | --- |
+| 初始版本/工作流回归 | `test_runtime_plan test_proportionate_research test_batch4.RunnerTest test_protocol10_coordinator test_task_continuation test_midterm_bindings -q`：53项通过 | `/tmp/rsi-f00-f04/f01-f02.log` |
+| 最终版本/预留/六类固定作业 | `test_version_binding test_midterm_host.LedgerTests test_fixed_command_host -v`：25项通过；scope强制预留不可被较小template覆盖的最后补验通过 | `bindings-reserve.log`、`supervisor-final.log` |
+| Host与真实基线后继 | `test_host_receipt_inputs test_midterm_host.DetachedHostTests -v`：6项通过。随后新增CPU超时/超存储、原生费用/越域/版本注入3项通过；配置工厂真实freeze与清理未闭合反例最后2项通过 | `host-final.log`、`host-faults.log`、`factory-and-cleanup-closure.log` |
+| 崩溃/暂停/未知 | 初始core组与Host组含派发前意图、提交后回执丢失、重复事件、人工暂停/取消/到期、有效失败不补跑、费用unknown及实际进程检测 | 同上及`receipt-recovery.log` |
+| 跨业务联调 | `test_task_completion test_training test_training_preparation test_midterm_deployment test_midterm_science test_theta_b test_batch3 test_upgrade_bridge -v`：原91项中90通过，1个旧θ×B fixture未到达准入分支。复用完整dataset fixture后，原拒绝目标分别由缺独立准入/自主来源拒绝严格覆盖，定点1项通过 | `cross-module.log`、`theta-fixture.log` |
+| 真实Supervisor | `test_runtime_supervisor`和强制预留组合11项中10通过；原退出码回收竞态修复后，延迟优雅退出/超时终止/孤儿清理3项通过，0.5秒原期限保持 | `supervisor-final.log`、`cleanup-reap.log` |
+| 真实角色隔离 | `test_f04_role_boundaries`现有10个案例均有有效通过证据：首批6；公开协议/实际Backend2；tasks/task_sets公开子集及漂移2。最后修改只定点补受影响项；另复用`test_deployment_runtime_isolation`3项和`test_protocol10_roles`完整broker业务1项通过 | 子代理本轮原命令结果；可用相同module定向重现 |
+| RPent调用方与真实RPC | 从RPent：`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=../core/src:../core/tests:. .venv/bin/python -m pytest tests/unit_tests/rpent/session tests/unit_tests/rpent/utils/rpc/test_transport_loopback.py tests/unit_tests/rpent/utils/rpc/test_session_lifecycle.py tests/unit_tests/robots/libero/test_runtime_evidence.py tests/unit_tests/robots/libero/test_action_spec_contracts.py -q`：78通过 | `rpent-callers.log` |
+| RPent实际冻结规则 | `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit_tests/rpent/session/test_runtime_counted_protocol.py tests/unit_tests/robots/libero/test_task_hint_consumer.py -q`：20通过，含新journal消费点漂移拒绝 | `rpent-frozen-rules.log` |
+| 静态与文档 | 新Python完整Ruff check/format check；受影响旧core错误类Ruff；RPent两文件完整Ruff/format；双Git diff --check、Python解析、Markdown新增链接与接口核对通过。两仓暂存patch与进入时逐字节相同 | `ruff-final.log`、`ruff-existing.log`、`format-final.log` |
+
+原始失败日志保留：新增回执丢失测试首次在监督进程尚未退出时开始恢复，补齐退出前提后定点通过；旧Host CPU测试补齐新permit/角色写域，原断言保留；θ×B旧fixture契约补齐；监督回收竞态修复。未删除失败记录、放宽期限、跳过断言或重跑挑选结果。pytest-timeout未安装仅产生原配置警告，本轮未安装依赖。未请求PR，全仓pre-commit/完整Python矩阵仍是发布前条件；未改Sphinx页面或其构建输入。
+
+### 同一真实Autoloop入口的端到端证据
+
+```bash
+RSI_TEST_NODE=/home/xzh/RSI-Agent-VLA/artifacts/midterm16-20261115/autoloop/dependencies/node-v24.11.1-linux-x64/bin/node \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests \
+timeout 60s RPent/.venv/bin/python -m unittest test_host_autoloop_receipts -v
+```
+
+真实`agent-autoloop up`、HTTP loopback、SQLite、command worker及`MidtermHost serve`从一次源事件自动完成`produce→consume`，两次重复投递、一次Host重启，6个timer事件/5个已完成timer轮次，两个业务节点各执行一次，人工advance=0。前驱真实产物经原生回执、结算与late refs被后继读取。新测试首次因导入TestCase类共发现8项且全通过；改成模块导入后最终仅发现该1项，不重复已通过真实链。
+
+去密钥证据：`/tmp/host-autoloop-receipts-xqxmutbi/summary.json`、`autoloop.log`、`host-first.log`、`host-restarted.log`。该链实际wall=4.773704238999926秒、累计storage=1174235字节、结束时current_disk=1481302字节，模型/GPU均0。临时业务域及凭据已清理，剩余自有进程0；这些费用保存于summary，不把临时占用释放解释为退款。其它工程测试耗时分别保留在各日志，不与这条链的计量重复加总。
+
+真实隔离正反例覆盖合法公开输入/输出，绝对路径、父目录、symlink、共享回执、其它角色scratch、继承环境、未授权GPU/设备、网络和release写域，以及候选超时后代清理。外部模型、trainer或设备接口返回可用明确测试替身；候选源码为测试提供的真实Python，控制、回执、存储、进程、RPC与隔离使用真实实现。跨业务临时域中的资格/发布API检查不激活正式发布域，合成产物不进入正式记录。
+
+原工作树增量基准、源码前字节、两仓status/refs及暂存/未暂存patch保存在`/tmp/rsi-f00-f04/before/`和同级文件。项目模型/Research/Planner请求、GPU、仿真、正式数据采集、原生训练、下载、安装、硬件均0。Piper只读API/归属未确认按01的F15关闭动作保留。本批不宣称G_F、真实模型兼容、能力收益或H3。
+
+<a id="35-f03f04-补修与-f05f09-第二批工程验证2026-11-17"></a>
+
+## 35. F03/F04 补修与 F05—F09 第二批工程验证（2026-11-17）
+
+本批状态统一见[04 §1.21](../项目文档/04_实施路线与执行状态.md#121-f03f04-补修与-f05f09-第二批2026-11-17)，实际接口见[01 §3.4](../项目文档/01_系统设计与框架复用.md#34-f05f09-实际消费者2026-11-17)。基于两仓完整原工作树；聚合main/3dbc59ad、RPent main/c57b134与§34相同，本地远端引用未刷新。CPython3.11.13和RPent editable/RLinf/OpenPI实际导入来源已重新核对，版本及安装commit与§34一致，无安装/下载。原始工作树与暂存diff保存在`/tmp/rsi-f05-f09/before/`；两仓暂存patch结束时按字节对比。
+
+### 补修与主要检查
+
+下表各组可重叠，不把多次有效检查相加为独立样本。主代理日志保留原stdout；代理交付记录保留实际工具返回的命令/结果，已清理的合成域日志不声称仍在磁盘。
+
+| 范围 | 有效结果与实际路径 | 证据位置 |
+| --- | --- | --- |
+| 前批两项补修 | `test_second_batch_host`2项通过：写域内目录export；越域/错版本/前驱未闭合/覆盖拒绝；同Host经过公开配置与真实隔离Research角色读目录字节；重启复用唯一角色回执，原operations不变 | `host-repairs.log`；后续177项集成包含该组及原Host全部回执检查 |
+| 共享跨模块集成 | 177项通过，覆盖Host、完整Candidate/Release、Research、φ、ρA/B/C、版本、真实存储/恢复与既有公开消费者 | `/tmp/rsi-f05-f09/core-integration.log`、`.resources` |
+| F05 | D/S/R/A/共同底层链71项通过；真实MCP与调用/结果入口批131项通过，原两项task hint顺序失败修复后相关19项通过；原因core导入缺失而skip的结果链补12项通过；末journal状态改动补5项通过，无遗留skip | `/tmp/rsi-f05-f09/f05-f08-handoff.md`含精确命令和资源 |
+| F06 | RPent实际媒体/State/冻结记忆/LeRobot导出80项通过；core媒体/学习/独立消费/合成retention最终30项通过；合法learn→freeze→新Job→真实L1落盘差异；技能健康批64项通过，两个fixture/环境问题各定点1项通过；最后临时费用计数补1项通过 | `f06-handoff.md`、`f06-checks-observed.log` |
+| F07与F04 | `test_f07_research/test_task_continuation/test_f04_role_boundaries`37项、18子测试通过；四机会→可信提案→build_configuration→真实Host CPU analysis→原回执→反馈；第五修订复用旧4completion字节及费用，只有新operation执行；真实受限代码Candidate与继承ψ被production research_prepare消费 | `f07-handoff.md`；原临时域正常清理，交付记录说明原始日志留存范围 |
+| F08 | 新φ/ρB跨链3项有效通过：提示改变、旧/新worker差异、五步不变、版本不兼容回退、unknown/technical不造标签；ρA真实出口见F06；contextualρC更新/探索/未知反馈/冻结继承见177项；ψ代码及实际research_prepare分流见F07 | `f05-f08-handoff.md`；`core-integration.log`；`f07-handoff.md` |
+| F09及Runtime可选配置 | 档案与Runtime投影8项中7项首轮通过；新增旧费用来源用例首次fixture取错快照层级，修正后单项通过；F07机会闭包lint修复后仅该受影响项通过。完整Bundle/历史父节点/失败费用/组合冲突与版本失配/真实Evaluator和Release查询均覆盖 | `archive-runtime.log`、`final-directed.log`、`final-repairs.log`；投影原`runtime-policy.log`及最终批有效结果 |
+| 静态和维护 | 新core模块/测试9文件完整Ruff和format检查通过；RPent归属文件定向Ruff由A/B交付。主代理另检查共享旧文件错误级Ruff、Python解析、两仓diff空白、Markdown链接与本轮增量 | `static-final.log`、主代理工具结果；未改Sphinx页面/构建输入 |
+
+主代理177项命令，从聚合根运行：
+
+```bash
+/usr/bin/time -v -o /tmp/rsi-f05-f09/core-integration.resources \
+  env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests:RPent taskset -c 0,1 \
+  RPent/.venv/bin/python -m unittest \
+  test_candidate_archive test_second_batch_host test_host_receipt_inputs test_core \
+  test_research_tools test_relation_learning test_contextual_research test_relation_research \
+  test_relation_runtime_wiring test_relation_evidence test_planner_task_hint \
+  test_task_completion test_task_completion_feedback test_proportionate_research \
+  test_research_catalog test_research_archive test_research_storage test_version_binding -v
+```
+
+该批在允许namespace/本地socket的宿主环境执行，wall14.08秒、user8.15秒、sys1.51秒、maxRSS124540KiB、filesystem outputs31640 blocks。原根sandbox不能写core和创建部分socket，均使用本轮已授权的`require_escalated`，没有审批拒绝或绕过。新检查用实际解释器和源码路径，未从`/tmp`源副本运行会被scratch挂载遮蔽的namespace代码。
+
+末次定点修复命令为相同环境前缀加：
+
+```bash
+-m unittest \
+  test_candidate_archive.CandidateArchiveTests.test_legacy_cost_lineage_is_preserved_without_claiming_complete_total \
+  test_f07_research.F07ResearchTests.test_four_opportunity_purposes_preserve_evidence_and_unknown_gain -v
+```
+
+两项通过。`final-directed.log`的其余7项已经通过且前提未变，未重复；该日志原1项fixture错误与修复均保留。Ruff使用`--no-cache`，避免默认`.ruff_cache`只读；Python3.10兼容的`timezone.utc`保留，局部注明规则例外。F07测试闭包绑定和F08 imports已整理，没有改变行为断言。
+
+### 事实、费用与验证边界
+
+L0身份/proposal/send/feedback/缺失/结果与成本保留。媒体选择在显式出口真实改变文件，固定/学习策略均受同一持久额度与证据保护。ρA目标仍为覆盖/引用成本代理，真实字节、诊断价值与任务收益分别保存；`StorageMeter`累计为采样下界，出口另存实际编码临时费用，精确累计为unknown，避免重叠相加。
+
+受限程序只有一个研究规则插件，真实bwrap网络/PID/设备/读写域、超时/失败/启动不明、错误版本、隐藏读与发布写域反例沿F04检查。代码返回三个研究动作；技术有效形成开发Candidate不获得任务收益或正式资格。旧Job冻结引用，新Job消费新程序；原生训练提案在当前0额度边界拒绝。必要视觉内容缺失保持未决；没有调用真实项目Research/Planner。
+
+外部模型/Env/trainer/设备只在明确边界用替身；进程、RPC、Host/Coordinator、原回执、Store、读写隔离为真实实现。合成CPU分析、示范导出和namespace探针不属于正式数据采集、原生训练、仿真或真实硬件。媒体删除仅操作本轮TemporaryDirectory合成域，没有清理历史证据。midterm16等旧任务的暂停、原协议、原事实/费用和active不变。
+
+开发分工为主代理＋A/B/C，子代理均`gpt-6.1-sol/high`。测试分配CPU0,1／2,3／4,5／6,7，BLAS/OMP/MKL线程1，合计最多8逻辑CPU。A完成F05后转F08执行侧，C的规则程序与ψ集成由主代理接入F08，主代理完成F09与最终集成；未创建更多代理。已测批次最高RSS为F06的790300KiB，主代理与A峰值分别124540/218680KiB；C插件另设512MiB地址空间、2CPU秒和最长10秒期限。全阶段精确累计I/O未追溯为伪精确总数，当前产物/临时占用与已测写入分开记录于04。
+
+项目模型、GPU、仿真、正式采集、原生训练、下载、依赖安装及真实硬件均0；未提交、push、PR、合并或正式部署。未请求PR，因此全仓pre-commit/完整unit suite与Python3.10/3.12矩阵仍属发布前检查，未作为本次已验证证据；本批维护文档为Markdown，不触发Sphinx构建。F10—F15独立能力、正式评价/发布消费者与G_F不由本批建立。
+
+## 36. F07/F08 隔离补修与 F10—F14 第三批工程验证（2026-11-17）
+
+本批独立授权与当前完成度统一见[04 §1.22](../项目文档/04_实施路线与执行状态.md#122-f07f08-隔离补修与-f10f14-第三批2026-11-17)，实际接口见[01 §3.5](../项目文档/01_系统设计与框架复用.md#35-f10f14-与隔离程序的实际接口2026-11-17)和[core README](README.md#f10f14数据原生更新独立评价发布与元考试)。基于聚合 main/3dbc59ad、RPent main/c57b134 的完整工作树；保留原未提交修改和暂存内容，未 fetch/pull/reset/clean/stash。RPent 相对本地 origin/main ahead2/behind2，不声称远端最新。
+
+解释器为 RPent/.venv/bin/python / CPython3.11.13；`rsi_vla` 导入 core/src，`rpent` 导入当前 RPent。原生依据是实际安装 RLinf 0.4.0 commit `2348ece3df113874671478be1360ae3115b346e3` 和 `rpent-openpi` commit `a560f4dd8205b8423ecd4c8a0fabb5f54140b8a0`。安装 Env 与本地 RLinf checkout 并非逐字相同；薄适配核对实际安装的 benchmark、`get_env_fn_params` 和初态消费点，未修改 RLinf/OpenPI，也未复制权重。
+
+### 真实内部路径和有效结果
+
+各行可以重叠，不将重复检查相加为独立样本。命令和原失败保存在 `/tmp/rsi-f10-f14/`，A/B/C 交接分别为 `A/handoff.json`、`B/status.md` 和 C 的日志/交接。
+
+| 范围 | 已验证路径与结果 | 证据 |
+| --- | --- | --- |
+| F07/F08 隔离补修 | Host→隔离 Research→专属 broker→无设备 ψ→operator 原始回执/费用→合法后继；正常/defer、补证、墙钟超时、CPU限制、未知启动禁止重发、冻结旧 Job、重复/重启；6项定向通过 | `rule-timeout.log`；后述191项集成包含这些检查 |
+| 自动唤醒 | 真实 Node24 Autoloop，一个初始事件、2次重复投递、1次 Host 重启，由 timer/native completion 完成 Research 故障合法 defer→后继，manual_advances=0，自有进程清理后0 | 最终 `/tmp/host-autoloop-receipts-y0ly8m34/summary.json`；原先成功证据 `/tmp/host-autoloop-receipts-v2hag4p1/` 保留 |
+| 共享跨模块 | 191项中190项首轮通过；唯一 Core setUp 因并行自有 Release 检查争共享锁失败，按本批验证锁串行后仅补该1项通过 | `core-integration.log/.resources`、`core-lock-target.log/.resources` |
+| F10/F11 | 真实7节点 Host/namespace/permit/reservation/监督：独立审核→晚绑定准入→原生准备→trainer外重边界→原始保存/解析→loader/Pi05VLAFacade外model边界→Candidate；完整 θ×B 与 Gate；半保存/漂移/processor/预算及缺θ反例 | A `final-focused.log` 前62项有效；teacher来源修后 `teacher-mixed.log`8通过；`science-regression.log`14通过；精确范围见 A/handoff.json |
+| 独立审核归属 | 新scope中所有材料合法，仅把质量审核放Research写域；真实evaluation拒绝，未产生admitted记录，Host结算与清理闭合 | A `review-domain-boundary.log`，1通过 |
+| F12 | 全指派矩阵、unknown/invalid、成功/效率/鲁棒/新能力与旧能力、手算配对、公开反馈与污染反例；未预列组合→独立BDDL/初态/新协议→Host→RPent binding→独立评价；公开任务回执不含私有协议 | B/status.md；目标/反馈/同Job边界18项，最终新目标 Host 定点1通过；早期46项与适用6项真实namespace成功结果复用 |
+| F13 | 原 Release 安全注册/资格/崩溃/重复/版本；自动独立initial/candidate矩阵→资格→激活→实际Runtime有效版plan→回滚→新Runtime plan；拒绝/未决、加载/未知费用、跨scope/stale与损坏候选回滚 | C `f13-host-final.log`1通过；原68项及2项namespace；后续66项65通过，损坏Bundle回滚修复后定点及新协议安全反例2通过 |
+| F14 | ψ真实程序修订/冻结→三arm同事实考试→实际开发候选→独立终点/同Job两里程碑→资格→发布→新Research继承，旧Job保持；起点/污染/缺失/无更新/预算和单终点无虚构曲线反例 | C `final-host-targets.log`中endpoint和4项安全/崩溃已通过，F13当时失败单独修复；`f13-f14-host-v2.log`中milestone已通过；B独立评分有效结果见交接 |
+| RPent调用方 | 物化任务CLI/daemon/Env薄适配、旧任务选择/执行与结果44通过；授权示范来源保留，Flywheel12项中10首轮通过，2项原生数据缓存只读前置修正后定点通过 | `rpent-materialized.log`；`flywheel-source-v2.log`、`flywheel-environment.log` |
+| 隐藏输入及Host恢复 | 真实Research/Runtime无法读取原Host溯源/log、Coordinator回执、私有目标协议；可读公开任务与成本。原公开配置/目录晚绑定测试改用真实监督Host，保留全部原断言，2项通过；原子并发写及Host28通过 | `private-projection.log` 首项及原Host有效结果；B/status.md最终2项；`storage-host.log` |
+
+主集成从聚合根运行（需允许本地socket/user namespace）：
+
+```bash
+/usr/bin/time -v -o /tmp/rsi-f10-f14/core-integration.resources \
+  env RSI_TEST_NODE=/home/xzh/RSI-Agent-VLA/artifacts/midterm16-20261115/autoloop/dependencies/node-v24.11.1-linux-x64/bin/node \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_DATASETS_CACHE=/tmp/rsi-f10-f14/hf-cache \
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests:RPent taskset -c 0,1 \
+  RPent/.venv/bin/python -m unittest \
+  test_core test_task_completion test_task_completion_feedback test_task_continuation \
+  test_second_batch_host test_host_receipt_inputs test_midterm_host test_fixed_command_host \
+  test_version_binding test_candidate_archive test_relation_consumption test_research_tools \
+  test_f04_role_boundaries test_f07_research test_host_private_projection \
+  test_host_atomic_writes test_inherited_rule_host -v
+```
+
+唯一共享锁冲突项随后在 `flock -w 30 /tmp/rsi-f10-f14/validation.lock` 内，以同解释器、路径和线程设置运行 `-m unittest test_core.CoreTest.test_known_hard_failure_rejects_even_without_comparators -v`，1项通过。之后本批发布测试使用该临时验证锁串行；生产动态锁不改。
+
+### 原失败、负责层修复与验证边界
+
+原 F07/F08 测试只直接调用 `TaskCompletionBackend.execute`，未覆盖外层 Research mount；该条不足保留。补修把启动、scratch和外部回执交给Host，Research只消费固定返回。新组合进一步暴露非动态角色未生成CPU supervisor许可、0模型计量缺项；均在原授权/费用owner补齐。未知启动先核对原标记，禁止重发；有效failure/defer不重跑找成功。
+
+F10联调观测Host注册并发共用 `.tmp`，已改为每次独立临时文件并原子替换，补可重现并发回归。实际 teacher exporter 输出 `authorized_demonstration` 与RPent来源集合不匹配，修来源契约并保留独立准入；旧fixture不再把有来源数据当legacy。F13加载观察producer被只读保护误挡，现只允许该独立producer写自己的观察；Runtime消费者仍只读。损坏候选回滚从可信已激活历史读取协议，不依赖已损坏候选文件。
+
+必要namespace/socket检查使用本批授权的宿主 `require_escalated`，没有修改全局安全配置。一次已有supervisor重启提议被自动审批拒绝；先只读查明CPU许可缺口、修负责层后只用新合成身份验证，没有重发旧未知副作用。一次旧测试改写因可能移除隔离断言被拒绝，后以明确保留全部断言的最小patch获准；生产permit检查保持。HF数据缓存首次指向只读用户目录，后定向改为本批自有 `/tmp/rsi-f10-f14/hf-cache`，offline开关保持，未下载或安装。
+
+原生代码真正调用安装 RLinf trainer、OpenPI模型构造与RPent `Pi05VLAFacade`。工程测试替换外部trainer/model/Env重组件，合成权重明确 `real_gradient_steps=0`，不能证明真实学习或真实加载兼容。控制、存储、回执、RPC、进程和隔离使用真实实现；真实环境初始化、物理可达性、训练效果、H3和正式发布收益仍未测。
+
+### 资源与维护
+
+上限48小时、8逻辑CPU、16GiB内存、10GiB新增持久/临时占用。测试初始主0,1/A2,3/B4,5/C6,7；宿主样本CPU3繁忙后A改2,8，其余不变，数值线程1。角色继承这三个线程环境约束，候选另限512MiB地址空间、2CPU秒与有界墙钟。没有终止或清理他人进程。
+
+主191项wall40.34s、user20.07s、sys4.80s、maxRSS129532KiB、filesystem outputs48856 blocks；A已测最高RSS1296720KiB。最终Autoloop链业务wall3.612800791976042s、累计采样storage942033B、结束current_disk1339631B，清理后自有进程0；当前占用与累计消费分列，采样字节是下界。全程精确CPU/I/O累计和并发内存峰值未知，不用单组峰值冒充全程值。
+
+项目Planner/Research请求、GPU作业、仿真、正式采集、原生梯度训练、真实权重加载、下载、依赖安装与硬件访问均0。开发助手使用现有账户，最多主加3子代理，模型gpt-6.1-sol/high。未提交、push、PR、合并或正式部署；midterm16等历史暂停、冻结协议、原事实/费用和active保持。已有Node二进制只作为工具读取，未重开其所属历史队列。
+
+本批维护文档为Markdown，不改Sphinx页面或构建输入。相关Ruff、AST、CLI help、两仓diff空白、维护链接及暂存内容字节核对按最终记录收口；不把发布前全仓pre-commit/完整Python矩阵列为已运行证据。F15需先确认Piper可修改副本及其归属/API；本批不进入F15、P/V，不宣称F16或G_F。
+
+### 最终θ消费者与交付收口
+
+θ侧最终实际源合并图在序列化费用闭合代码稳定后通过：`A/theta-release-cost-closure.log`，1 passed in33.73s，wall34.84s、user18.87s、sys3.39s、maxRSS145980KiB、filesystem outputs56584 blocks。命令从聚合根执行：
+
+```bash
+flock /tmp/rsi-f10-f14/validation.lock env \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
+  CUDA_VISIBLE_DEVICES='' JAX_PLATFORMS=cpu \
+  PYTHONPATH=core/src:core/tests taskset -c 2,8 \
+  /usr/bin/time -v RPent/.venv/bin/python -m pytest \
+  core/tests/test_f10_f11_host.py::test_real_host_data_training_load_bundle_graph \
+  -q -x -p no:cacheprovider --tb=short
+```
+
+该次新增消费者验证复用A实际训练/加载原回执和Candidate，经完整θ矩阵/原未知Gate，再由明确 `synthetic_theta_artifact_engineering` 协议的独立CPU文件判据进入原Release资格/激活、实际Runtime有效版plan、新绑定和回滚。硬约束仅为合成无设备与产物接口；真实模型兼容、物理安全、学习和任务收益仍unmeasured。`close_theta_candidate_costs`重读原Host accounting/completion/supervisor，把Candidate创建时暂列pending而后已settled的序列化费用派生闭合；原Candidate历史费用不变，未知/未清理不得激活。新增费用反例3项/6子测试通过。前一版本1 passed31.95s保留于 `A/theta-release-integrated.log`，它不代替最终费用闭合证据。
+
+最初Autoloop成功链的原费用wall3.4707871910068206s、采样累计733987B、末current_disk1336684B保留于 `/tmp/host-autoloop-receipts-v2hag4p1/summary.json`；代码/信息流改变后的最终链见上表，重验理由不同，不择优或抹消成本。最终维护文档本地链接/路径、两仓diff空白和暂存patch字节核对通过，29个受影响Python文件主AST解析通过，各owner静态结果在交接；RPent真实CLI help含 `--materialized-task`。本批没有Sphinx页面/构建输入变化。最终状态和资源只以04§1.22为当前权威。
+
+
+## 37. 第四批分范围验收与文档准备（2026-11-17）
+
+本批 scope 为 `framework-batch4-20261117`，唯一当前状态、实际起止、授权硬限与费用由[04 §1.23](../项目文档/04_实施路线与执行状态.md#123-第四批仿真验收与准备2026-11-17)维护。保留两个仓库完整脏工作树与原暂存；不从 HEAD 重建测试来源。§34—36 的有效离线结果按实际代码/输入/环境适用性复用，相关修复后只补受影响检查。
+
+`G_F_sim` 的断言范围为 C01—C07/C09/C10，对应 F00—F14 仿真适用项与 F16_sim。C08 未验收、延期，全局 G_F 另需 F15/C08/真机 F16 和共享版本兼容。当前正文只登记范围；最终检查命令、真实结果与未验证项据本批回执补入，不提前宣称 G_F_sim 或 F16_sim 完成。
+
+C 的产物位于 `artifacts/framework-batch4-20261117/C/`，只执行独立 Markdown 语义、路径/链接和差异检查；不改 Sphinx 页面/构建输入，不触发中英文 Sphinx 构建。P03/P05 草案见[03 §9](../项目文档/03_实验设计与验收协议.md#9-第四批-p03p05-草案2026-11-17)。完整 suite 由主代理统筹，涉及共享动态锁的测试经 `/tmp/rsi-batch4-validation.lock` 串行；C 使用 CPU6,7、数值线程1，不启动项目模型、GPU、仿真初始化、训练/加载、下载或安装。
+
+### C 文档核验与当前门槛
+
+C 使用 RPent/.venv/bin/python（CPython 3.11.13），`taskset -c 6,7`、OMP/OPENBLAS/MKL 线程1，对九份授权 Markdown 执行本地目标与新增标题锚点检查，并运行两仓 `git diff --check`。脚本与报告归 `artifacts/framework-batch4-20261117/C/static-checks.py`、`static-checks.json` 和 `static-checks.resources`；全部本地目标存在，18个新增锚点链接有效，两仓空白检查退出0。单组 wall0.24s、user0.17s、sys0.07s、maxRSS16700KiB；该值是本组检查，不是本批全程费用。
+
+F10 cache 准入缺口由主代理修复并经真实 Host 文件7项通过；原失败与修复日志为 `artifacts/framework-batch4-20261117/f10-before.log`、`f10-after.log`，组合检查及完整 suite 由主代理/B 更新。必需 pre-commit hook 版本 v0.15.22 的 Python 环境未安装，只有源码缓存；本机 Ruff 0.17.4 独立检查不能替代该门槛。本批禁安装，当前 G_F_sim 保持待验收，不据已通过局部检查启动依赖此门槛的动态作业。
+
+
+### 本批最终检查命令与证据闭合
+
+最终状态见04§1.23；下列为实际检查证据，不改变原失败、旧scope或原费用。两仓暂存patch与进入时逐字节相同；未改本批Sphinx输入。
+
+从聚合根使用既有CPython3.11.13，线程1、CPU0,1、offline HF缓存及统一验证锁：
+
+```bash
+export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests:RPent
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_DATASETS_CACHE=/tmp/rsi-batch4-hf-cache
+export RSI_TEST_NODE=/home/xzh/RSI-Agent-VLA/artifacts/midterm16-20261115/autoloop/dependencies/node-v24.11.1-linux-x64/bin/node
+taskset -c 0,1 flock -w 30 /tmp/rsi-batch4-validation.lock \
+  RPent/.venv/bin/python -m unittest discover -s core/tests -p 'test_*.py' -v
+```
+
+原952项中935通过／17失败或错误，保留 `core-unittest.log/resources`；未重跑935成功项。负责层修复后主 `test_finish_audit test_deployment_runtime_isolation test_5a_assets.QualificationTest.test_unqualified_initial_scope_accept_stale_and_rollback test_release_reconciliation.ReconciliationTests test_release_host` 共19通过；B Runtime负责组35通过，token历史兼容组6通过，具体命令／原失败／resources见B/status.md。
+
+core pytest选取四个含top-level pytest函数的模块，完整node argv保存 `core-pytest-command.json`，31通过、48.38s，含F10最终8项和训练／加载外重边界、独立θ×B与发布／回滚。新增训练准入归属反例保留全部原隔离／费用断言：Research可写域中即使内容完整的admitted回执，也不能被Host训练准备消费。
+
+RPent从本仓根执行 `env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=../core/src:../core/tests:. OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_DATASETS_CACHE=/tmp/rsi-batch4-hf-cache taskset -c 6,7 flock -w 30 /tmp/rsi-batch4-validation.lock .venv/bin/python -m pytest tests/unit_tests -v`，原2013通过／5失败／8跳过。5处旧fixture或拒绝消息语义修复后，53通过／8跳过；仅3文件style变更后的两模块22通过。35个测试断言AST完全相同，原27处Ruff错及活跃临时域中间37处扫描错保留，最终全仓 `.venv/bin/ruff check --preview .` 用已安装0.17.4通过。日志、准确skip原因和资源见C/rpent-suite-plan.json。
+
+旧core维持既有错误级Ruff范围：`RPent/.venv/bin/ruff check --isolated --select E4,E7,E9,F <受影响core文件>`；完整旧文件style扫描曾报既有dict风格等16处，不把它转成无关全文件重排。两仓修改及未跟踪Python AST、diff空白、文档本地目标／新锚点核对完成；exact pre-commit v0.15.22 hook环境和pytest-timeout缺失，禁安装preflight见precommit-preflight.json。因此不宣称G_F_sim通过。
+
+本批两条实际Node24 Autoloop／timer／Host重启链的去密钥原summary/log持久于 `validation/autoloop-current/`；manual_advances=0、结束自有进程0。其内部模型／Env／trainer边界替换，不是本scope真实组件P1。A真实P02则读取既有239帧并在独立evaluation获得admitted，原unknown、关联CPU恢复与费用皆见A/real-p02-host-recovery02-result.json。
+
+新增token计量把reasoning视为output子集，保留total和strict完整性；不填缺失为0。实际Codex专用backend仅有事后usage证据，未确认生成token cap和完整输入上界，不把计量补件当作请求前硬限。本批没有项目模型、GPU、仿真Runtime、真实梯度训练／加载、下载／安装或真机；没有有效动态permit／真实P1，不执行P04。当前资源分项与未知量见resource-evidence.json，后续科学预算须待真实完整生命周期测量。
+
+
+### 续程：指定检查、G_F_sim-v3与真实P1未决
+
+补充授权v2沿同scope/原费用/原expiry，有限安装与token观测语义见04§1.23。C实际仅向主venv增加pytest-timeout2.4.0；指定Ruff0.15.22 tracked+24个untracked文件通过，timeout实际中止／成功正反例通过，完整RPent2019passed/7范围外skip/0warning，实际LIBERO源码case通过。C/resume-delivery.json保存来源、前后依赖、12,838,857B下载与工具占用。原952项不重复，继续复用未受影响成功项及原修复。
+
+新增真实消费者／计量的CPU证据：B scope-gate31、scope-accounting13、ram-meter11；A native meter11；A runtime-memory16与5subtests；C p1-consumer36个不同case增量；主 `continuation-data-protocol.log` 12passed。原P1控制失败先暴露Coordinator生命周期锁，再暴露20s工作与30s整体清理包络不足；改为持租约预提交pause、活跃作业Host非阻塞对账及40s完整包络后，真实Autoloop控制和Host边界入口通过。全部原失败保留，重叠检查不加为独立样本。
+
+真实控制图通过原 `prepare_deployment`/`launch_deployment`启动。原source manifest误用batch标识，被实际消费者在Runtime reservation/submission前拒绝；以同任务的 `manifest-format-repair-v3/`原生未提交证明、metadata事务和行政control事件修复至既有5a-assets-offline格式，原快照／progress／费用不删除，同一Runtime身份继续。不存在额外Runtime启动或新的initial start事件。
+
+真实Runtime实际启动1，Env构造/reset、既有base VLA加载成功；首次Sol/medium generation forward15.054719s ConnectTimeout，本地502，SDK无自动retry，无response_terminal／response_id／usage；setup30、policy/prediction0。模型通信／usage／动作往返未通过，独立结果technical_invalid/unknown；可信evaluation实际产生P1 inconclusive，未人工填写passed，训练／save／trained load均0。主按原Host.finish完成已知硬成本：GPU/outerwall129.545832901s，采样RSS峰值31,924,129,792B，cleanup真无剩余进程。phase补已有原生计费所需tool/env维度后原used保留；token unknown未填0或退款。
+
+原冻结launcher env -i未继承宿主代理，是已确认配置差异；当前仅Runtime/Research透传既有8个proxy键，不改backend/model/account，其他角色网络与环境边界保持。`test_role_proxy_environment test_f04_role_boundaries`及Research配置调用方共15passed，B/proxy-fix.log/resources与proxy-fix-source-revision.json留精确范围；旧失败Runtime/source字节未变。G_F_sim-v3只重验这一受影响F04范围，其他有效工程证据复用，不宣称修后真实连接已成功。
+
+当前A/scope状态blocked_usage_reconciliation、dynamicfalse，原硬请求槽消耗1/4、Runtime1/2，名义余3请求/1Runtime；GPU已计129.545832901/7200，储备600只计一次。token确切累计未知，下一模型请求保持暂停，不以SDK默认0、ConnectionTimeout通常不计费、请求字节或上下文估算补账。旧SDK有/models/analytics非模型辅助流量，未找到额外生成或usage证据。自有原生／Host／Hub／observer全部清理，controller-cleanup.json留PIDbirth核验；不恢复历史队列，不进入V_sim或真机。当前结论与剩余前提统一见04§1.23，实际交付/资源/真实组件分别见delivery-evidence.json、resource-evidence.json、A/real-component-readiness.json。
+
+
+### v3单条例外、G_F_sim-v5与recovery1原raw复审
+
+本段续接前述首次尝试与原暂停记录。用户v3只豁免首条旧失败的input/output token unknown，在原4请求／2Runtime内授权一次恢复；原record/status/actual/missing、费用和expiry保留。scope Gate与旧Ledger受影响18项通过，P1消费者50项由首组47项有效成功和3项修后定点覆盖（18新增、32原消费者），未重跑既有namespace／Host／20秒monitor；来源为[one-off Gate组](../artifacts/framework-batch4-20261117/B/one-off-recovery.log)及[C消费者交接](../artifacts/framework-batch4-20261117/C/p1-recovery-status.json)。其中wrong recovery operation仍可取得豁免的生产缺口已在负责层修复，原反例与旧fixture schema修正均保留。
+
+recovery1以251份真实当前源码静态快照、独立run／bundle／输出与新P1路径启动，旧Runtime和inconclusive P1未覆盖，初始事件／工程probe未重跑。新请求3次的usage完整：38919 input、302 output（reasoning34含于output，cached input23424含于input），VLA prediction1、policy动作5步；原生任务在模型请求预算停止时有效失败。outer GPU／wall116.525760403s及清理已闭合；原scope硬请求累计4、Runtime累计2，余量均0，旧token未知使scope精确总token仍未知。不同层计时、快照占用和账本费用不重复相加，原费用与当前资源由04和primary记录维护。
+
+[新P1原回执](../artifacts/framework-batch4-20261117/A/state/evaluation/p1/P1-acceptance-recovery1.json)先为inconclusive：独立audit的L0 coverage不通过，使dispatcher完整性未决。真实common工具结束由`model_gate` marker表明预算中断，原消费者只识别同L0的`budget_stop/vla_segment_end`。B仅在`runtime_acceptance._closed_budget_interruption`保留旧分支并新增严格的common/model_gate来源闭合分支：model sequence仅在model流中匹配；common身份、实际prediction／5步、之后的Planner通知及SDK错误继续独立检查。
+
+B从聚合根、CPU4,5／数值线程1／统一锁运行：
+
+```bash
+env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=core/src:core/tests:RPent \
+  taskset -c 4,5 flock -w 30 /tmp/rsi-batch4-validation.lock \
+  RPent/.venv/bin/python -m unittest \
+  test_common_budget_acceptance test_runtime_acceptance \
+  test_runtime_closure test_execution_arm_acceptance -v
+```
+
+31项通过（含4个新增case及13个负分支），unittest0.904s，process wall3.68s、maxRSS136616KiB；[原日志](../artifacts/framework-batch4-20261117/B/common-budget-audit.log)和[resources](../artifacts/framework-batch4-20261117/B/common-budget-audit.resources)保留准确命令。指定缓存Ruff0.15.22对新测试完整check／format、消费者错误级检查通过；不为这项局部消费者修复重复952项core或已通过的完整RPent suite。
+
+[G_F_sim-v5](../artifacts/framework-batch4-20261117/validation/G_F_sim-v5.json)据上述受影响验证通过，其他适用工程证据沿原版本复用。B对[同一真实raw的独立audit-v2](../artifacts/framework-batch4-20261117/B/recovery1-budget-audit-v2.json)得到24个checks全true、`passed=true`、tool issues为空，`outcome`仍为failure。原result、independent result、L0、model流、marker及旧P1逐字节不变；新增Runtime／模型请求为0。该audit是新评价版本，不把任务失败改成成功，也不直接替代正式可信P1验收回执；正式新P1版本和原生阶段按后续实际回执追加。
+
+
+### 可信P1 review2与原生阶段启动
+
+固定的G_F_sim-v5受影响检查后，Hostv5在evaluation角色执行独立CPU作业`framework-batch4-20261117-p1-acceptance-recovery1-review2`，生成[新可信P1回执](../artifacts/framework-batch4-20261117/A/state/evaluation/p1/P1-acceptance-recovery1-review2.json)：9个checks全true、missing为空，status=passed。该[CPU作业原completion](../artifacts/framework-batch4-20261117/A/operator/p04/host-state/jobs/framework-batch4-20261117-p1-acceptance-recovery1-review2/completion.json)为completed、cleanup=true、model/GPU0。原首次P1和recovery1两份inconclusive原回执均保留，同一原raw没有新Runtime或请求。新回执继续显式保存`retained_token_unknowns`，旧record保持unknown，`token_amounts_filled_zero=false`；真实任务outcome仍failure，工程组件资格不等于任务成功或能力增益。
+
+Hostv5随后自动完成[原生训练准备](../artifacts/framework-batch4-20261117/A/operator/p04/host-state/jobs/batch4-p04-training-prepare01/completion.json)，并于2026-11-17T19:10:43Z[提交唯一训练pilot](../artifacts/framework-batch4-20261117/A/operator/p04/host-state/jobs/batch4-p04-training-pilot01/submission.json)。本次观察训练reservation为active、原completion尚无，load未提交；因此只记录真实启动，不记梯度、保存或训练后加载成功。此时[A账](../artifacts/framework-batch4-20261117/A/accounting.json)的used.training_starts仍0是未完成Host结算的状态，不代表没有启动：实际唯一训练启动1，在途预留与已结算费用分别读取。模型4请求／Runtime2启动硬额度均已用尽；训练和load仍按原各一次、现有permit及包络执行，不新增动态权限。
+
+
+### 原生3步训练、step3保存与训练后加载的真实闭合
+
+Host自动接续的唯一训练pilot与唯一load-check均已completed、cleanup=true、unknown维度为空。原生入口没有替换trainer／model边界；使用安装的RLinf/OpenPI与RPent `Pi05VLAFacade`，其原启动／批次／优化器／监督／原始结果分别保留于[训练根](../artifacts/framework-batch4-20261117/A/runtime/framework-batch4-resource-pilot01-prepared/framework-batch4-resource-pilot01/)和[load根](../artifacts/framework-batch4-20261117/A/runtime/framework-batch4-resource-pilot01-prepared/framework-batch4-resource-pilot01-load-check/)。训练与load各执行原定一次，原suite有效结果继续复用。
+
+- `batch-check.json`真实读取已准入两集239帧，actions `[1,10,32]`、state `[1,32]`、NCHW image `[1,3,224,224]`。`optimizer-role.json`记录FP32MasterAdamW、单卡global/micro batch1、gradient accumulation1；`parameter-census.json`记录action_expert_only可训练430,098,464元素、冻结2,923,335,408元素。
+- [weight-update-check](../artifacts/framework-batch4-20261117/A/runtime/framework-batch4-resource-pilot01-prepared/framework-batch4-resource-pilot01/weight-update-check.json)在step3记录非零梯度与两处非零权重变化，两个采样冻结参数相等；[原训练job-result](../artifacts/framework-batch4-20261117/A/runtime/framework-batch4-resource-pilot01-prepared/framework-batch4-resource-pilot01/job-result.json)为completed。按预定3步上限保存final checkpoint至 `checkpoints/global_step_3`，`actor/model_state_dict/full_weights.pt`实际6,946,527,306B。
+- [load-check](../artifacts/framework-batch4-20261117/A/runtime/framework-batch4-resource-pilot01-prepared/framework-batch4-resource-pilot01-load-check/load-check.json)记录实际新step3加载passed、两处saved probes与已训参数一致、processor一致，`Pi05VLAFacade`/原生`Pi0Eval`生成一次finite `[1,5,7]` prediction；[verified handoff](../artifacts/framework-batch4-20261117/A/runtime/framework-batch4-resource-pilot01-prepared/framework-batch4-resource-pilot01-load-check/deployment-handoff-verified.json)绑定实际加载的新产物。原训练handoff中的filesystem-only／not_run是加载前记录，实际加载证据在独立verified版本，不回写伪装旧事实。
+
+Host训练外层194.294892579s/device-s，load外层71.643392384s/device-s；分别见[训练completion](../artifacts/framework-batch4-20261117/A/operator/p04/host-state/jobs/batch4-p04-training-pilot01/completion.json)和[load completion](../artifacts/framework-batch4-20261117/A/operator/p04/host-state/jobs/batch4-p04-native-load01/completion.json)。原生load内部约59.6465s，不与outer重复相加。对应全进程树采样RSS峰值44,740,009,984／25,003,577,344B，高于worker单进程观测；共享页按进程计，采样可能漏峰，不是内核配额或精确全局峰值。两次`model-meter.json`均closed、项目Planner/Research请求0，native policy预测另计；scope原硬计数为model4／Runtime2／train1／load1，当前无active reservation，GPU累计512.009878267 device-s；原unknown token继续独立保留，其余已知硬费用已结算。
+
+当前证据建立所测配方的真实batch／梯度／更新／保存／加载／prediction与资源包络；没有训练后任务能力评价、旧能力保持或发布，不能外推正式科学效果、全部G_P或现场安全。P03/P05仍按实际问题、强基线、波动与完整矩阵注册准备，new-goal／Research／Meta／真机各保留其真实证据缺口。最终当前状态和费用由04及primary维护，本节保留工程、真实组件和研究结论各自的来源。
+
+
+[原生结果汇总](../artifacts/framework-batch4-20261117/A/native-result-summary.json)集中引用原始batch／optimizer／probe／save／load／Host闭合及模型meter。训练与load外层合计265.938284963 device-s，内层计时嵌套其中；顺序作业RAM峰值不相加。P06未来同≤3step配方软规划为完整训练600、load300、一次全局GPU reserve600，合计1500 device-s；这不授权重复成功pilot或新科研试验，正式V_sim资源总额等待P03/P05。最终controllers／permit／scope闭合由主04与primary记录维护。

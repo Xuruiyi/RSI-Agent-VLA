@@ -25,6 +25,9 @@ def load_protocol(path):
     for spec in value["metrics"].values():
         if spec["direction"] not in {"max", "min"} or spec["max"] <= spec["min"] or spec["weight"] < 0:
             raise ValueError("invalid metric normalization")
+    if value.get('objective_comparison') is not None:
+        from .objective_evaluation import objective_policy
+        objective_policy(value)
     policy = value.get("conditional_objective")
     if policy is not None:
         fields = {"minimum_relative_request_reduction", "minimum_absolute_request_reduction", "minimum_improved_tasks", "maximum_task_request_increase", "request_score_weight"}
@@ -47,6 +50,11 @@ def apply_comparison_attempt_evidence(plan, side, result):
         if any(field not in result.costs for field in ("whole_job_wall_seconds", "gpu_device_seconds_envelope",
                 "model_requests", "tool_calls", "environment_steps", "artifact_bytes")):
             result.hard_constraints['resource_limits'] = None
+    if result.intervention.get('objective_comparison_schema') == 'rsi-objective-comparison-v1':
+        result.intervention['attempt_costs_by_slot'] = [
+            dict(task_key=slot.get('task_key'), seed=slot.get('seed'),
+                 attempts=[dict(attempt.get('costs', {})) for attempt in slot.get('attempts', [])])
+            for slot in plan['slots'] if slot['side'] == side]
     by_task = {}
     task_costs_complete = True
     for slot in plan['slots']:
@@ -108,7 +116,11 @@ def assignment_metrics(protocol, result):
             raise ValueError("invalid assignment label")
         unknown += row["outcome"] == "unknown"
         invalid += row["validity"] == "invalid"
-        if row["outcome"] != "unknown" and (not row.get("evidence_ref") or row.get("outcome_source") not in {"native_benchmark", "verified_budget_exhaustion"}):
+        sources = {"native_benchmark", "verified_budget_exhaustion"}
+        if (protocol["scope"] == "offline" and protocol.get("synthetic_engineering") is True
+                and result.intervention.get("synthetic_engineering") is True):
+            sources.add("synthetic_task")
+        if row["outcome"] != "unknown" and (not row.get("evidence_ref") or row.get("outcome_source") not in sources):
             raise ValueError("assignment lacks independent native/terminal evidence")
         if row.get("outcome_source") == "verified_budget_exhaustion" and row["outcome"] != "failure":
             raise ValueError("budget exhaustion can establish failure only")
@@ -203,6 +215,10 @@ def conditional_efficiency(protocol, candidate, baseline, anchor):
 
 
 class EvaluationStore(Records):
+    def candidate_archive(self, research_store, candidate_id, **filters):
+        """Trace the exact candidate combination used by independent evaluation."""
+        return research_store.candidate_archive(candidate_id, evaluations=self, **filters)
+
     """Place outside the research worker's writable root in real deployments."""
 
     def path(self, kind, key):
@@ -264,6 +280,28 @@ class EvaluationStore(Records):
             return False
         atomic_json(path, record)
         return True
+
+    def public_feedback(self, result_id: str, *, protocol: dict, information_scope: str | None = None) -> dict:
+        """Persist the fixed public projection permitted by its frozen protocol."""
+        from .contracts import ExperimentResult
+        from .objective_evaluation import feedback_projection
+        result = ExperimentResult(**self.get('results', result_id))
+        if protocol.get('status') != 'frozen' or result.protocol_id != protocol['protocol_id']:
+            raise ValueError('feedback requires its frozen evaluation protocol')
+        scope = result.intervention.get('information_scope')
+        if scope not in {'development', 'release', 'sealed', 'meta_exam'} or information_scope is not None and information_scope != scope:
+            raise ValueError('feedback source needs its matching explicit information scope')
+        if scope in {'sealed', 'meta_exam'} or protocol.get('feedback_policy', {}).get(scope) != 'aggregate':
+            projected = {'schema': 'rsi-evaluation-feedback-v1',
+                         'information_scope': scope, 'status': 'withheld'}
+        else:
+            projected = feedback_projection(result, information_scope=scope)
+        envelope = {'schema': 'rsi-public-evaluation-feedback-v1', 'result_id': result_id,
+                    'protocol_id': result.protocol_id, 'bundle_id': result.bundle_id,
+                    'evaluator_source': {'role': 'evaluation', 'result_id': result_id,
+                                         'protocol_id': result.protocol_id}, 'feedback': projected}
+        self.put('public_feedback', result_id, envelope)
+        return {'feedback': envelope, 'feedback_ref': str(self.path('public_feedback', result_id).resolve())}
 
     def save_result(self, result):
         if result.role != "release":
@@ -468,6 +506,10 @@ class Gate:
     def evaluate(self, decision_id, candidate, *, current_bundle_id, candidate_result=None,
                  baseline_result=None, anchor_result=None):
         p = self.protocol
+        if p.get('objective_comparison') is not None:
+            from .objective_evaluation import evaluate_objective
+            return evaluate_objective(p, decision_id, candidate, current_bundle_id=current_bundle_id,
+                candidate_result=candidate_result, baseline_result=baseline_result, anchor_result=anchor_result)
         reasons, scores = [], {}
         refs = [r.result_id for r in (candidate_result, baseline_result, anchor_result) if r]
         verdict = "inconclusive"

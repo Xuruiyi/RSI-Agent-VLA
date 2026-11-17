@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class FinishAuditTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='finish-audit-', dir='/tmp/rsi-followup-main')
+        self.temp = tempfile.TemporaryDirectory(prefix='finish-audit-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.identity = dict(run_id='r', episode_id='e', bundle_id='b', protocol_id='p')

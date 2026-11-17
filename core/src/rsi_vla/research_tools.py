@@ -65,7 +65,7 @@ def opportunity_source_eligibility(source, evidence):
 
 
 class ResearchTools:
-    def __init__(self, store, job, protocol, *, domain_policy):
+    def __init__(self, store, job, protocol, *, domain_policy, public_feedback_root=None):
         if job.store is not store:
             raise ValueError("tools and job must share the same research store")
         self.store, self.job, self.protocol = store, job, protocol
@@ -73,6 +73,7 @@ class ResearchTools:
         if self.base.protocol_id != protocol["protocol_id"]:
             raise ValueError("job/protocol mismatch")
         self.domain_policy = dict(domain_policy)
+        self.public_feedback_root = Path(public_feedback_root).resolve() if public_feedback_root is not None else None
 
     def _save(self, kind, key, record):
         value = {"job_id": self.job.state["job_id"], "base_bundle_id": self.base.bundle_id,
@@ -178,14 +179,47 @@ class ResearchTools:
     def query_development(self, result_ids, *, bundle_ids=None):
         """Read only the development namespace, never sealed/release results."""
         historical=set(self.domain_policy.get('historical_development_bundle_ids', []))
-        bundles = set(bundle_ids or [self.base.bundle_id, *historical])
         allowed = {self.base.bundle_id} | historical
         allowed.update(t["bundle_id"] for t in self.store.all("rule_trials")
                        if t["job_id"] == self.job.state["job_id"])
+        bundles = set(allowed if bundle_ids is None else bundle_ids)
         if not bundles <= allowed:
             raise ValueError("evidence bundle outside this job")
         return [self._validate_result(ExperimentResult(**self.store.get("development_results", key)), bundles)
                 for key in result_ids]
+
+    def query_public_feedback(self, result_ids: list[str]) -> list[dict]:
+        """Read evaluator-published aggregates without opening formal result files."""
+        from .storage import identifier
+        root = self.public_feedback_root
+        if root is None or root.name != 'public_feedback' or root.is_relative_to(self.store.root.resolve()):
+            raise PermissionError('public feedback requires the host-bound evaluator namespace')
+        output = []
+        for result_id in result_ids:
+            path = (root / (identifier(result_id) + '.json')).resolve(strict=True)
+            if path.parent != root:
+                raise PermissionError('feedback reference escapes its public projection namespace')
+            value = json.loads(path.read_text())
+            source = {'role': 'evaluation', 'result_id': result_id, 'protocol_id': self.protocol['protocol_id']}
+            if (set(value) != {'schema', 'result_id', 'protocol_id', 'bundle_id', 'evaluator_source', 'feedback'}
+                    or value['schema'] != 'rsi-public-evaluation-feedback-v1'
+                    or value['result_id'] != result_id or value['protocol_id'] != self.protocol['protocol_id']
+                    or value['evaluator_source'] != source):
+                raise ValueError('public feedback identity or evaluator source mismatch')
+            feedback = value['feedback']
+            scope = feedback.get('information_scope')
+            base = {'schema', 'information_scope'}
+            if feedback.get('schema') != 'rsi-evaluation-feedback-v1' or scope not in {'development','release','sealed','meta_exam'}:
+                raise ValueError('invalid public feedback projection')
+            if feedback.get('status') == 'withheld':
+                if set(feedback) != base | {'status'}:
+                    raise ValueError('withheld feedback contains evaluation details')
+            elif (scope in {'sealed','meta_exam'} or self.protocol.get('feedback_policy', {}).get(scope) != 'aggregate'
+                    or set(feedback) != base | {'result_id','metrics','unknown_count','invalid_count'}
+                    or feedback['result_id'] != result_id):
+                raise ValueError('feedback exceeds the frozen public aggregate policy')
+            output.append(value)
+        return output
 
     def read_development_events(self, result_id, event_ids=None):
         """Read exact L0 events only from an admitted development result's own view."""
@@ -608,7 +642,8 @@ class ResearchTools:
             old = self.store.get("opportunities", previous["opportunity_id"])
             from .task_policy import task_policy
             same_scope = not task_policy(self.protocol) or (
-                previous["protocol_id"] == self.protocol["protocol_id"]
+                previous["job_id"] == self.job.state["job_id"]
+                and previous["protocol_id"] == self.protocol["protocol_id"]
                 and previous["base_bundle_id"] == self.base.bundle_id
                 and previous.get("exploration") == exploration
             )
@@ -805,7 +840,64 @@ class ResearchTools:
                             self.protocol.get("dynamic_authorized") is True else "offline"),
             novelty_type="configuration")
         self.store.save_candidate(candidate)
+        from .candidate_archive import register_context
+        register_context(self.store, candidate_id,
+            experiment_ids=[experiment_id, *additional_experiment_ids],
+            hypothesis_refs=[plan['opportunity_id']] if plan.get('opportunity_id') else [],
+            selection_reason=plan.get('selection_reason', 'development screening candidate'),
+            dependencies={'versions':{key:getattr(self.base,key) for key in
+                ('theta_ref','processor_ref','backend_ref','code_ref')}},
+            origin={'kind':'research_experiment','ref':experiment_id},
+            contribution_ids=[str(trial['diff_ref'])])
         return asdict(candidate)
+
+    def discover_research_opportunity(self, opportunity_id, **kwargs):
+        """Normalize four opportunity purposes on the existing evidence boundary."""
+        from .research_plans import discover_research_opportunity
+        return discover_research_opportunity(self, opportunity_id, **kwargs)
+
+    def consume_research_plan(self, proposal, *, policy):
+        """Materialize bounded choices through host-owned operation templates."""
+        from .research_plans import consume_research_plan
+        return consume_research_plan(self, proposal, policy=policy)
+
+    def record_plan_feedback(self, plan_id, *, receipts):
+        """Return the original operation receipts to the same research lineage."""
+        from .research_plans import record_plan_feedback
+        return record_plan_feedback(self, plan_id, receipts=receipts)
+
+    def prepare_code_candidate(self, candidate_id, **kwargs):
+        """Prepare one scoped research-rule plugin in an independent work copy."""
+        from .research_code import prepare_code_candidate
+        return prepare_code_candidate(self, candidate_id, **kwargs)
+
+    def execute_code_candidate(self, candidate_id, *, config):
+        """Execute the scoped program with the real isolated candidate consumer."""
+        from .research_code import execute_code_candidate
+        return execute_code_candidate(self, candidate_id, config=config)
+
+    def run_inherited_research_rule(self, execution_id, **kwargs):
+        """Run the immutable starting Job's research program and retain its receipt."""
+        from .research_code import run_inherited_research_rule
+        return run_inherited_research_rule(self, execution_id, **kwargs)
+
+    def query_candidates(self, **filters):
+        """Read local candidate history without reading protected evaluation results."""
+        from .candidate_archive import query_candidates
+        if set(filters) - {'target_bundle', 'task_scope', 'action_protocol'}:
+            raise ValueError('Research archive accepts development filters only')
+        return query_candidates(self.store, protocol_id=self.protocol['protocol_id'], **filters)
+
+    def select_parent(self, selection_id, candidate_id, *, reason):
+        """Select a retained legal parent for a separately admitted next Job."""
+        from .candidate_archive import select_parent
+        return select_parent(self, selection_id, candidate_id, reason=reason)
+
+    def compose_candidates(self, candidate_id, **kwargs):
+        """Prepare one complete unevaluated composition at this immutable base."""
+        from .candidate_archive import compose_candidates
+        return compose_candidates(self.store, candidate_id,
+                                  base_bundle_id=self.base.bundle_id, **kwargs)
 
     def defer(self, decision_id, *, opportunity_id, reason, missing_evidence):
         self._owned("opportunities", opportunity_id)
@@ -825,7 +917,8 @@ class ResearchTools:
 
 class ResearchToolkit:
     """Explicit mutating tools; RPent readonly scheduling is not an ACL."""
-    names = ("query_development", "read_development_events", "query_experience", "discover_opportunity", "inspect_native_finish_opportunity",
+    names = ("query_development", "query_public_feedback", "read_development_events", "query_experience", "query_candidates", "select_parent",
+             "discover_research_opportunity", "discover_opportunity", "inspect_native_finish_opportunity",
              "inspect_finish_budget_opportunity", "plan_rule_experiment",
              "prepare_rule_trial", "submit_candidate", "defer")
 
@@ -1052,8 +1145,11 @@ class BoundedResearchAdapter(ResearchLLMAdapter):
         if exploration and not set(allowed) <= set(exploration["operators"]):
             raise ValueError("request operators exceed exploration scope")
         request = super().prepare_request(tools, **kwargs)
+        from .version_binding import research_binding
+
         envelope = {
             **request,
+            "version_binding": research_binding(tools),
             "schema": "rsi-bounded-research-request-v2",
             "domain_policy": tools.domain_policy,
             "allowed_operators": allowed,
@@ -1259,7 +1355,8 @@ class BoundedResearchAdapter(ResearchLLMAdapter):
             domain["evidence_input"]["media_refs"] = "selected_events"
         if parent.get("evidence_input", {}).get("sdk_projection") == "terminal_history_catalog_v2":
             domain["evidence_input"]["sdk_projection"] = "terminal_history_catalog_v2"
-        followup = ResearchTools(tools.store, tools.job, tools.protocol, domain_policy=domain)
+        followup = ResearchTools(tools.store, tools.job, tools.protocol, domain_policy=domain,
+                                 public_feedback_root=tools.public_feedback_root)
         return self.prepare_request(followup, request_id=request_id, result_ids=list(wanted),
             max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens)
 

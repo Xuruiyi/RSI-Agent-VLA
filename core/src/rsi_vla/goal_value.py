@@ -286,6 +286,9 @@ def evaluate_goal_value(protocol, opportunity, *, policy):
     capacity is accepted only under the explicitly registered catalog basis;
     neither this measurement nor its numeric value reports physical success.
     """
+    if policy.get('composition_rules') is not None:
+        from .trusted_goal import composition_evidence
+        return composition_evidence(protocol, opportunity, policy=policy)
     target = opportunity["target"]
     if (
         opportunity.get("source") != "new_goal"

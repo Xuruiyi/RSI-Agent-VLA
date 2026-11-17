@@ -226,13 +226,18 @@ class TaskContinuationBackend:
         }
 
     def observe(self, progress, inputs):
+        receipts = deepcopy(self.config.get("prior_receipts", {}))
+        for identity, receipt in progress["receipts"].items():
+            if identity in receipts and receipts[identity] != receipt:
+                raise ValueError("current receipt conflicts with frozen prior result")
+            receipts[identity] = receipt
         key = self.start
         while True:
             node = self.nodes[key]
             if "terminal" in node:
                 return {"terminal": node["terminal"]}
             operation = self.operations[node["operation_id"]]
-            receipt = progress["receipts"].get(operation["operation_id"])
+            receipt = receipts.get(operation["operation_id"])
             if receipt is None:
                 return {"next_operation": deepcopy(operation)}
             stored = _read(receipt["receipt_ref"])
@@ -363,3 +368,55 @@ def drive(coordinator, load_inputs, *, policy, sleep=time.sleep, clock=time.mono
         del record["active_wait_started"]
         record["checks"] += 1
         atomic_json(path, record)
+
+
+def install_research_plan(configuration, registration, *, progress, after_node):
+    """Append trusted finite work at an idle terminal of a new-task configuration.
+
+    Return a new configuration. Persist it under a new backend registration root;
+    the original registration and any original operation receipts stay immutable.
+    """
+    if (configuration.get("schema") != "rsi-task-completion-v1" or
+            configuration.get("continuation", {}).get("schema") != SCHEMA):
+        raise ValueError("research plans require a new-task continuation")
+    if progress.get("pending") or (progress.get("wait") or {}).get("reason") == "submission_unknown":
+        raise RuntimeError("reconcile the original pending operation before installing a plan")
+    if progress.get("paused") or progress.get("status") in {"paused", "cancelled", "terminated"}:
+        raise RuntimeError("research installation cannot resume a paused or closed task")
+    if registration.get("action") != "registered" or not registration.get("operations"):
+        raise ValueError("only trusted registered research work can be installed")
+    result = deepcopy(configuration)
+    prior = deepcopy(result.get("prior_receipts", {}))
+    by_id = {op["operation_id"]: op for op in configuration["operations"]}
+    for identity, receipt in progress.get("receipts", {}).items():
+        if identity not in by_id or receipt.get("status") != "completed":
+            raise ValueError("prior receipt must be an original completed operation")
+        stored = _read(receipt["receipt_ref"])
+        if (stored.get("operation") != by_id[identity] or stored.get("status") != "completed"
+                or stored.get("value") != receipt.get("value")):
+            raise ValueError("prior receipt differs from original operation result")
+        if identity in prior and prior[identity] != receipt:
+            raise ValueError("prior receipt identity conflict")
+        prior[identity] = deepcopy(receipt)
+    if prior:
+        result["prior_receipts"] = prior
+    nodes = result["continuation"]["nodes"]
+    if after_node not in nodes or set(nodes[after_node]) != {"terminal"}:
+        raise ValueError("research plan attaches only to a registered terminal")
+    existing = {op["operation_id"] for op in result["operations"]}
+    operations = registration["operations"]
+    names = [identifier(op["operation_id"]) for op in operations]
+    if len(set(names)) != len(names) or set(names) & existing:
+        raise ValueError("research plan operation identity already registered")
+    end = identifier(registration["plan_id"] + "-feedback")
+    if end in nodes or any(name in nodes for name in names[1:]):
+        raise ValueError("research plan node identity already registered")
+    for index, operation in enumerate(operations):
+        key = after_node if index == 0 else names[index]
+        successor = names[index + 1] if index + 1 < len(names) else end
+        nodes[key] = {"operation_id": operation["operation_id"],
+                      "transitions": [{"next": successor}]}
+    nodes[end] = {"terminal": "research_followup_required"}
+    result["operations"].extend(deepcopy(operations))
+    result.setdefault("research_plan_registrations", []).append(registration["plan_id"])
+    return result

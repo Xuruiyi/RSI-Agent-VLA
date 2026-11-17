@@ -155,6 +155,20 @@ class LedgerTests(unittest.TestCase):
         )
         self.assertNotIn("{prompt}", json.dumps(rules))
 
+    def test_mandatory_reserve_is_shared_capacity_not_extra_consumption(self):
+        with self.assertRaisesRegex(PermissionError, "budget exhausted"):
+            self.ledger.reserve("one", budget=self.budget, phase_ref=self.phase,
+                gpu_devices=[0], receipt_ref=self.root / "one.json",
+                mandatory_reserve={"gpu_seconds": 50})
+        self.scope["mandatory_reserve"] = {"gpu_seconds": 20}
+        atomic_json(self.scope_ref, self.scope)
+        record = self.ledger.reserve("one", budget=self.budget, phase_ref=self.phase,
+            gpu_devices=[0], receipt_ref=self.root / "one.json",
+            mandatory_reserve={"gpu_seconds": 5})
+        self.assertEqual(record["mandatory_reserve"], {"gpu_seconds": 20})
+        self.assertEqual(self.ledger.read()["used"]["gpu_seconds"], 0)
+        self.ledger.validate_reservation("one")
+
 
 class DetachedHostTests(unittest.TestCase):
     setUp = LedgerTests.setUp
@@ -170,8 +184,11 @@ class DetachedHostTests(unittest.TestCase):
         core_ref = self.root / "core.json"
         protocol_ref = self.root / "protocol.json"
         inputs_ref = self.root / "inputs.json"
-        result_ref = self.root / "native-result.json"
-        count_ref = self.root / "executions.txt"
+        (self.root / "operator").mkdir()
+        result_ref = self.root / "operator/native-result.json"
+        count_ref = self.root / "operator/executions.txt"
+        self.scope.update(cpu_authorized=True, cpu_operation_ids=["cpu-job"])
+        atomic_json(self.scope_ref, self.scope)
         atomic_json(protocol_ref, {"protocol_id": "cpu-engineering"})
         phase = {
             "limits": {"wall_seconds": 60, "storage_bytes": 1000000},
@@ -187,6 +204,7 @@ class DetachedHostTests(unittest.TestCase):
             "base_bundle_id": "engineering",
             "phase_ref": str(self.phase),
             "operations": [operation],
+            "isolation_task_root": str(self.root),
             "continuation": {
                 "schema": "rsi-task-continuation-v1",
                 "start": "job",
@@ -224,9 +242,14 @@ class DetachedHostTests(unittest.TestCase):
                         "import pathlib,time,json; "
                         f"pathlib.Path({str(count_ref)!r}).open('a').write('run\\n'); "
                         "time.sleep(.4); "
-                        f"pathlib.Path({str(result_ref)!r}).write_text(json.dumps({{'operation_id':'cpu-job'}}))",
+                        f"pathlib.Path({str(result_ref)!r}).write_text(json.dumps(dict(schema='rsi-cpu-operation-result-v1',scope_id='test-midterm',operation_id='cpu-job',version='offline-v1',status='completed')))",
                     ],
                     "result_ref": str(result_ref),
+                    "permit_ref": str(self.root / "operator/permit.json"),
+                    "permit_template": {"kind": "generic-cpu-model0"},
+                    "cpu_purpose": "analysis",
+                    "version": "offline-v1",
+                    "storage_write_roots": [str(self.root / "operator")],
                 }
             },
         }

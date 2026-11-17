@@ -34,7 +34,7 @@ from rpent.session.runtime import RuntimeBudgetExceeded, RuntimeJournal
 from rpent.tools import ToolResult, iter_tools
 from rpent.tools.base import tool
 from rpent.tools.direct_action import direct_action_tool
-from rpent.tools.toolkit import Toolkit
+from rpent.tools.toolkit import ToolCancelled, Toolkit
 from rpent.utils.logging import get_logger, get_output_dir
 
 if TYPE_CHECKING:
@@ -79,6 +79,10 @@ class LiberoToolkit(Toolkit):
         self._attempts_per_session: int = max(0, int(attempts_per_session))
         self._session_attempt: int = 1
         self.runtime_journal = RuntimeJournal.from_environment()
+        if self.runtime_journal is not None:
+            from rpent.session.media import configure_media_policy
+
+            configure_media_policy(self._state, self.runtime_journal)
         try:
             self.init_primitives(runtime_kwargs=runtime_kwargs)
         except BaseException as exc:
@@ -173,7 +177,8 @@ class LiberoToolkit(Toolkit):
         self._relation_control = load_control(self.runtime_journal, set(self._tools))
         if self._relation_control is not None:
             self.runtime_journal.emit(
-                "relation_policy_loaded", relation="rhoB",
+                "relation_policy_loaded",
+                relation="rhoB",
                 rho_ref=self._relation_control["rho_ref"],
                 version_signature=self._relation_control["version_signature"],
                 consumer="LiberoToolkit._execute_primitive",
@@ -187,6 +192,117 @@ class LiberoToolkit(Toolkit):
             )
 
     def _execute_primitive(
+        self, name: str, handler: Callable[..., ToolResult], **kwargs: Any
+    ) -> ToolResult:
+        from robots.libero.skill_contracts import SKILLS, admit_skill, skill_result
+
+        self._common_prediction_state = None
+        if name not in SKILLS:
+            if getattr(self.primitives, "_execution_feedback_unknown", False):
+                return ToolResult(
+                    data={
+                        "action": "deferred",
+                        "tool_status": "deferred",
+                        "executed_steps": 0,
+                        "reason": "action_feedback_unknown",
+                        "next_action": "reconcile_execution",
+                    }
+                )
+            return self._dispatch_primitive(name, handler, **kwargs)
+        # rhoB selects an existing same-goal worker; admission consumes the
+        # selected worker's own conditions before any environment/evaluator RPC.
+        from robots.libero.skill_routing import route_for_call
+
+        route = route_for_call(getattr(self, "_relation_control", None), name, kwargs)
+        selected = route["selected_worker"] if route else name
+        route_stop = selected in {"handoff", "defer"}
+        if route_stop:
+            selected = name
+        arguments = kwargs
+        if selected != name:
+            arguments = {
+                "prompt" if selected != "vla_execute" else "instruction": route[
+                    "instruction"
+                ],
+                "max_chunks": kwargs.get("max_chunks", 24),
+            }
+        contract, admission = admit_skill(self, selected, arguments)
+        if route_stop:
+            admission.update(
+                status="deferred", reason="registered_route_" + route["selected_worker"]
+            )
+        elif (
+            route
+            and route["criterion"].get("schema") == "rsi-skill-drawer-open-criterion-v1"
+            and (
+                arguments.get("max_chunks", 24) != route["max_chunks"]
+                or set(arguments)
+                - {
+                    "instruction" if selected == "vla_execute" else "prompt",
+                    "max_chunks",
+                }
+            )
+        ):
+            admission.update(
+                status="rejected", reason="registered_route_argument_mismatch"
+            )
+        if self.runtime_journal is not None:
+            self.runtime_journal.emit("skill_contract_admission", **admission)
+        out = None
+        if route_stop:
+            out = self._dispatch_primitive(name, handler, **kwargs)
+            data = out.data
+        elif admission["status"] != "admitted":
+            data = {
+                "action": admission["status"],
+                "executed_steps": 0,
+                "unknown_steps": 0,
+                "reason": admission["reason"],
+                "next_action": admission["next_action"],
+            }
+        else:
+            self.primitives._skill_execution_totals = dict.fromkeys(
+                (
+                    "predictions_started",
+                    "predictions_completed",
+                    "executed_steps",
+                    "unknown_steps",
+                ),
+                0,
+            )
+            try:
+                out = self._dispatch_primitive(name, handler, **kwargs)
+                data = out.data
+            except Exception as exc:
+                # Legacy pick/contact handlers may raise after a partial RPC.
+                # Their prediction/action facts survive in the primitive report.
+                data = {
+                    **getattr(self.primitives, "_skill_execution_totals", {}),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "stop_reason": "budget"
+                    if isinstance(exc, RuntimeBudgetExceeded)
+                    else "cancelled"
+                    if isinstance(exc, ToolCancelled)
+                    else "technical_error",
+                }
+                if isinstance(exc, ToolCancelled):
+                    data["interrupted"] = True
+        semantics = skill_result(self, contract, admission, data)
+        data["skill_result"] = semantics
+        data.update(
+            {
+                key: semantics[key]
+                for key in (
+                    "tool_status",
+                    "subgoal_outcome",
+                    "native_outcome",
+                    "action_feedback_unknown",
+                )
+            }
+        )
+        return out if out is not None else ToolResult(data=data)
+
+    def _dispatch_primitive(
         self, name: str, handler: Callable[..., ToolResult], **kwargs: Any
     ) -> ToolResult:
         if self._common_execution and name != "vla_execute":
@@ -211,45 +327,102 @@ class LiberoToolkit(Toolkit):
                 self._primitives.end_primitive()
         journal = self.runtime_journal
         selected = route["selected_worker"]
-        binding = {"rho_ref": self._relation_control["rho_ref"],
-                   "route_id": route["route_id"], "state": route["state"],
-                   "requested_worker": route["requested_worker"], "trigger_worker": name,
-                   "selected_worker": selected,
-                   "criterion_ref": route["criterion"]["criterion_ref"]}
+        binding = {
+            "rho_ref": self._relation_control["rho_ref"],
+            "route_id": route["route_id"],
+            "state": route["state"],
+            "requested_worker": route["requested_worker"],
+            "trigger_worker": name,
+            "selected_worker": selected,
+            "criterion_ref": route["criterion"]["criterion_ref"],
+        }
         decision = journal.emit("relation_route_decision", **binding)
         binding["decision_sequence"] = decision
         if selected in {"handoff", "defer"}:
-            return ToolResult(data={
-                "relation_route": binding, "action": selected, "executed_steps": 0,
-                "next_action": "Inspect the current observations before choosing the next skill."
-                if selected == "handoff" else "This registered skill route is deferred.",
-            })
-        drawer = route["criterion"].get("schema") == "rsi-skill-drawer-open-criterion-v1"
+            return ToolResult(
+                data={
+                    "relation_route": binding,
+                    "action": selected,
+                    "executed_steps": 0,
+                    "next_action": "Inspect the current observations before choosing the next skill."
+                    if selected == "handoff"
+                    else "This registered skill route is deferred.",
+                }
+            )
+        drawer = (
+            route["criterion"].get("schema") == "rsi-skill-drawer-open-criterion-v1"
+        )
         allowance = kwargs.get("max_chunks", 24)
         if type(allowance) is not int or not 1 <= allowance <= 24:
             raise ValueError("routed skills require an unchanged 1..24 chunk allowance")
-        if drawer and (allowance != route["max_chunks"] or set(kwargs) - {
-                "instruction" if name == "vla_execute" else "prompt", "max_chunks"}):
-            raise ValueError("registered drawer route requires its exact 24chunk argument contract")
-        actual_kwargs = kwargs if selected == name and not drawer else {
-            "prompt" if selected in {"pi0_pick", "pi0_doubled"} else "instruction": route["instruction"],
-            "max_chunks": allowance,
+        if drawer and (
+            allowance != route["max_chunks"]
+            or set(kwargs)
+            - {"instruction" if name == "vla_execute" else "prompt", "max_chunks"}
+        ):
+            raise ValueError(
+                "registered drawer route requires its exact 24chunk argument contract"
+            )
+        actual_kwargs = (
+            kwargs
+            if selected == name and not drawer
+            else {
+                "prompt"
+                if selected in {"pi0_pick", "pi0_doubled"}
+                else "instruction": route["instruction"],
+                "max_chunks": allowance,
+            }
+        )
+        actual_handler = (
+            handler if selected == name else getattr(self._primitives, selected)
+        )
+        evidence = {
+            **journal.identity(),
+            "route_id": route["route_id"],
+            "worker": selected,
+            "client_route_sequence": decision,
         }
-        actual_handler = handler if selected == name else getattr(self._primitives, selected)
-        evidence = {**journal.identity(), "route_id": route["route_id"],
-                    "worker": selected, "client_route_sequence": decision}
         before = env.rsi_skill_observation(evidence={**evidence, "phase": "start"})
-        journal.emit("skill_route_start", **binding, client_route_sequence=decision,
-                     actual_arguments=actual_kwargs, environment_observation=before)
+        journal.emit(
+            "skill_route_start",
+            **binding,
+            client_route_sequence=decision,
+            actual_arguments=actual_kwargs,
+            environment_observation=before,
+        )
         self._primitives.begin_primitive(selected)
+        result, execution_error = None, None
         try:
             result = actual_handler(**actual_kwargs)
+        except Exception as exc:
+            execution_error = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
             self._primitives.end_primitive()
-        after = env.rsi_skill_observation(evidence={**evidence, "phase": "handoff"})
-        journal.emit("skill_route_handoff", **binding, client_route_sequence=decision,
-                     actual_arguments=actual_kwargs, chunks_used=result.data.get("chunks_used"),
-                     execution_error=result.data.get("error"), environment_observation=after)
+            # Failure to collect independent evaluation evidence must not turn
+            # an already executed skill into an apparently unexecuted call.
+            try:
+                after = env.rsi_skill_observation(
+                    evidence={**evidence, "phase": "handoff"}
+                )
+            except Exception as exc:
+                after = {"source_sequence": None, "status": "unknown"}
+                journal.emit(
+                    "skill_route_evidence_missing",
+                    **binding,
+                    phase="handoff",
+                    error=type(exc).__name__,
+                )
+            journal.emit(
+                "skill_route_handoff",
+                **binding,
+                client_route_sequence=decision,
+                actual_arguments=actual_kwargs,
+                chunks_used=result.data.get("chunks_used") if result else None,
+                execution_error=execution_error
+                or (result.data.get("error") if result else None),
+                environment_observation=after,
+            )
         result.data["relation_route"] = binding
         return result
 
@@ -400,6 +573,7 @@ class LiberoToolkit(Toolkit):
         self._attempt += 1
         self._session_attempt += 1
         result = self._primitives.reset_episode(reason=reason)
+        self._skill_relations = {}
         result["attempt"] = self._attempt
         result["notice"] = (
             f"Episode restarted; this is attempt {self._attempt}. The original "
@@ -422,10 +596,23 @@ class LiberoToolkit(Toolkit):
             out = ToolResult(data=dict(saved.data), images=list(saved.images))
             out.data["execution_segment"] = result
             out.data["agent_elapsed_s"] = elapsed_s
-            return out
-        return self._capture_env_state(
-            command=command, result=result, elapsed_s=elapsed_s
-        )
+        else:
+            out = self._capture_env_state(
+                command=command, result=result, elapsed_s=elapsed_s
+            )
+        for key in (
+            "skill_result",
+            "tool_status",
+            "subgoal_outcome",
+            "native_outcome",
+            "action_feedback_unknown",
+            "reason",
+            "next_action",
+            "action",
+        ):
+            if key in result:
+                out.data[key] = result[key]
+        return out
 
     def _capture_env_state(
         self,
@@ -563,7 +750,7 @@ class LiberoToolkit(Toolkit):
         for record in self._state.records():
             result = record.result or {}
             action = (record.command or {}).get("action")
-            if action == "vla_execute":
+            if action in {"vla_execute", "pi0_pick", "pi0_doubled"}:
                 execution_segments.append(
                     {
                         **result,
@@ -642,17 +829,19 @@ class LiberoToolkit(Toolkit):
             from robots.libero.skill_routing import private_evidence_access
 
             if private_evidence_access(journal, name, arguments):
-                return ToolResult(data={
-                    "error": "Environment evaluation evidence is private to the independent evaluator.",
-                    "runtime_budget": journal.budget_snapshot(),
-                })
+                return ToolResult(
+                    data={
+                        "error": "Environment evaluation evidence is private to the independent evaluator.",
+                        "runtime_budget": journal.budget_snapshot(),
+                    }
+                )
             result = super().execute_tool(name, arguments)
             status = (
                 "interrupted"
                 if result.data.get("interrupted")
                 else "failed"
                 if result.data.get("error")
-                else "completed"
+                else result.data.get("tool_status", "completed")
             )
             result.data["runtime_budget"] = journal.budget_snapshot()
             return result

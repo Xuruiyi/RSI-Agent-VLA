@@ -21,25 +21,52 @@ def read_model_events(root, gate, identity):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def request_usage(model_events, *, expected_requests=None):
-    """Keep returned usage as a lower bound when any admitted request is missing."""
-    admitted = [event for event in model_events if event['kind']=='request_admitted']
-    terminals = {event.get('request_number'):event for event in model_events if event['kind']=='response_terminal'}
-    missing=[]
-    token_values = {}
-    for name,key in [('input_tokens','input_tokens'),('cached_input_tokens','cached_tokens'),('output_tokens','output_tokens')]:
-        values=[]
+def request_usage(model_events, *, expected_requests=None, require_reasoning=False):
+    """Keep unmatched usage unknown; reasoning is a subset of output tokens.
+
+    Historical consumers require input/output/cache. New strict measurements
+    also require the returned reasoning breakdown and consistent total tokens.
+    """
+    admitted = [event for event in model_events if event['kind'] == 'request_admitted']
+    terminals = {}
+    for event in model_events:
+        if event['kind'] == 'response_terminal':
+            terminals.setdefault(event.get('request_number'), []).append(event)
+    fields = {
+        'input_tokens': ('input_tokens',),
+        'cached_input_tokens': ('input_tokens_details', 'cached_tokens'),
+        'output_tokens': ('output_tokens',),
+        'reasoning_tokens': ('output_tokens_details', 'reasoning_tokens'),
+        'total_tokens': ('total_tokens',),
+    }
+    required = set(fields) if require_reasoning else set(fields) - {'reasoning_tokens', 'total_tokens'}
+    missing, token_values = [], {}
+    numbers = [event.get('request_number') for event in admitted]
+    matched = (len(numbers) == len(set(numbers)) and
+               (expected_requests is None or expected_requests == len(admitted)) and
+               (not require_reasoning or all(type(number) is int for number in numbers)))
+    for name, path in fields.items():
+        values = []
         for event in admitted:
-            usage=terminals.get(event['request_number'],{}).get('usage') or {}
-            value=(usage.get('input_tokens_details') or {}).get(key) if name=='cached_input_tokens' else usage.get(key)
-            if type(value) is int:values.append(value)
-        token_values[name] = sum(values) if len(values)==len(admitted) else None
-        token_values['observed_'+name] = sum(values) if values else None
-        if len(values)!=len(admitted):missing.append(name)
-    if expected_requests is not None and expected_requests!=len(admitted):
-        for name in ('input_tokens','cached_input_tokens','output_tokens'):
-            token_values[name]=None
-            if name not in missing:missing.append(name)
+            returned = terminals.get(event.get('request_number'), [])
+            if len(returned) != 1:
+                continue
+            usage = returned[0].get('usage') or {}
+            value = usage
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            if type(value) is not int or value < 0:
+                continue
+            if name == 'reasoning_tokens' and (type(usage.get('output_tokens')) is not int or value > usage['output_tokens']):
+                continue
+            if name == 'total_tokens' and (type(usage.get('input_tokens')) is not int or
+                    type(usage.get('output_tokens')) is not int or value != usage['input_tokens'] + usage['output_tokens']):
+                continue
+            values.append(value)
+        token_values[name] = sum(values) if matched and len(values) == len(admitted) else None
+        token_values['observed_' + name] = sum(values) if values else None
+        if token_values[name] is None and name in required:
+            missing.append(name)
     return token_values, missing
 
 
@@ -264,6 +291,7 @@ def finalize_runtime(context, *, raw_result_path=None, derived_root=None):
         'closure_source':'versioned offline reparse of original launcher/native facts' if derived_root else 'launcher after process and transport cleanup', 'missing':list(missing)}
     admitted = [e for e in model_events if e['kind']=='request_admitted']
     token_values, token_missing = request_usage(model_events, expected_requests=gate.get('requests_forwarded'))
+    _, strict_token_missing = request_usage(model_events, expected_requests=gate.get('requests_forwarded'), require_reasoning=True)
     if model_evidence_unconfirmed or not model_events and gate.get('requests_forwarded') is None:
         token_values={name:None for name in token_values}
         token_missing.extend(['input_tokens','cached_input_tokens','output_tokens'])
@@ -289,6 +317,9 @@ def finalize_runtime(context, *, raw_result_path=None, derived_root=None):
         'reset_seconds':service.get('reset_wall_seconds'),
     }
     costs={'identity':identity, **token_values, 'cached_input_is_subset':True,
+        'reasoning_is_output_subset':True,
+        'usage_complete_including_reasoning':not strict_token_missing and not model_evidence_unconfirmed and gate.get('requests_forwarded') is not None,
+        'missing_usage_including_reasoning':strict_token_missing,
         'actual_model_requests':gate.get('requests_forwarded', len(admitted) if model_events else None), 'tool_calls':client.get('tool_calls'),
         'vla_predictions_started':len(inference_starts) if action_events else None,
         'vla_predictions_completed':sum(e.get('completed') is True for e in inference_ends) if inference_complete else None,

@@ -3,16 +3,29 @@
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core/src"))
-from rsi_vla.adapters.pi05_training import (build_recipe, build_learning_recipe, checkpoint_tensor_inventory, dataset_acquisition_proposal,
-    acquire_dataset_metadata, acquire_demonstration_files, materialize_demonstration_subset,
-    inspect_checkpoint, inspect_native_config, read_native_batch, prepare_cpu_demonstrations,
-    static_training_memory, validate_dataset_manifest, verify_installed_sources,
-    audit_demonstration_payload)
+from rsi_vla.adapters.pi05_training import (
+    acquire_dataset_metadata,
+    acquire_demonstration_files,
+    audit_demonstration_payload,
+    build_learning_recipe,
+    build_recipe,
+    checkpoint_tensor_inventory,
+    dataset_acquisition_proposal,
+    inspect_checkpoint,
+    inspect_native_config,
+    materialize_demonstration_subset,
+    prepare_admitted_training,
+    prepare_cpu_demonstrations,
+    read_native_batch,
+    static_training_memory,
+    validate_dataset_manifest,
+    verify_installed_sources,
+)
 from rsi_vla.training import TrainingBudget, dynamic_lock
 
 
@@ -24,6 +37,10 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--run-id", default="pi05-resource-pilot")
     parser.add_argument("--read-batch", action="store_true")
+    parser.add_argument("--data-admission")
+    parser.add_argument("--scope-id")
+    parser.add_argument("--protocol-id")
+    parser.add_argument("--reviewer-id")
     parser.add_argument("--learning-plan", help="registered finite learning plan JSON; pilot remains the default")
     parser.add_argument("--budget", help="TrainingBudget JSON for a pilot or the registered learning job")
     parser.add_argument("--audit-payload", action="store_true", help="audit local demonstrations on CPU; does not admit them")
@@ -84,6 +101,18 @@ def main():
         return
     if not args.model_path or not args.norm_stats_path:
         raise ValueError("offline preparation requires --model-path and --norm-stats-path")
+    if args.data_admission:
+        if not all((args.dataset_manifest, args.scope_id, args.protocol_id, args.reviewer_id, args.budget)):
+            raise ValueError("admitted preparation needs manifest, scope, protocol, reviewer and budget")
+        report = prepare_admitted_training(manifest_ref=args.dataset_manifest,
+            admission_ref=args.data_admission, scope_id=args.scope_id, protocol_id=args.protocol_id,
+            reviewer_id=args.reviewer_id, model_path=args.model_path, norm_stats_path=args.norm_stats_path,
+            output_root=output, run_id=args.run_id,
+            budget=TrainingBudget(**json.loads(Path(args.budget).read_text())),
+            learning_plan=json.loads(Path(args.learning_plan).read_text()) if args.learning_plan else None,
+            read_batch=args.read_batch)
+        print(json.dumps(report, indent=2))
+        return
     if output.exists():
         raise ValueError("prepare output must be a new directory")
     report = {"installed": verify_installed_sources(),
@@ -106,7 +135,7 @@ def main():
         manifest = json.loads(Path(args.dataset_manifest).read_text())
         report["dataset"] = validate_dataset_manifest(manifest)
         dataset_root = report["dataset"]["dataset_root"]
-        report["status"] = "prepared_pending_training_authorization"
+        report["status"] = "interface_prepared_pending_independent_data_admission"
     output.mkdir(parents=True)
     norm_snapshot = output / "processor/physical-intelligence/libero/norm_stats.json"
     norm_snapshot.parent.mkdir(parents=True)

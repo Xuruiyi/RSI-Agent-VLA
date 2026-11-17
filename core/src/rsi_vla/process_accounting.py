@@ -161,3 +161,87 @@ def accounted_storage_bytes(output):
         floor, retained = certified_retention_floor(output)
         accounted = max(accounted, floor + max(0, raw - retained))
     return accounted
+
+
+class ProcessTreeMemoryMeter:
+    """Read RSS for the owned leader, descendants and exact inherited job tags.
+
+    PID birth and UID bind each observation. Shared resident pages count per
+    process, so this can overestimate physical RAM; exact peaks between samples
+    remain unknown. This meter only reads process metadata.
+    """
+
+    def __init__(self, leader_pid: int, *, context_ref: str | Path) -> None:
+        self.leader_pid = leader_pid
+        self.uid = os.getuid()
+        self.markers = {"RSI_RUNTIME_CONTEXT": {str(Path(context_ref).resolve())}}
+        self.identities = {}
+        self.current = {}
+        self.peak = 0
+        leader = self._process(leader_pid)
+        if leader["uid"] != self.uid:
+            raise PermissionError("memory meter leader belongs to another user")
+        self.identities[leader_pid] = leader["start_ticks"]
+        self.ancestor_identities = {(leader_pid, leader["start_ticks"])}
+
+    @staticmethod
+    def _process(pid: int) -> dict:
+        path = Path("/proc") / str(pid)
+        fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+        return {"pid": pid, "uid": path.stat().st_uid, "state": fields[0],
+                "ppid": int(fields[1]), "pgid": int(fields[2]),
+                "start_ticks": int(fields[19]),
+                "rss_bytes": max(0, int(fields[21])) * os.sysconf("SC_PAGE_SIZE")}
+
+    @staticmethod
+    def _markers(pid: int) -> dict:
+        try:
+            values = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            return {}
+        result = {}
+        for value in values:
+            name, _, content = value.partition(b"=")
+            if name in {b"RSI_RUNTIME_CONTEXT", b"RSI_TRAINING_JOB_ROOT"}:
+                result[name.decode()] = content.decode(errors="replace")
+        return result
+
+    def sample(self) -> dict:
+        processes, markers = {}, {}
+        for path in Path("/proc").glob("[0-9]*"):
+            try:
+                item = self._process(int(path.name))
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            if item["uid"] == self.uid and item["state"] != "Z":
+                processes[item["pid"]] = item
+                markers[item["pid"]] = self._markers(item["pid"])
+        selected = {pid for pid, item in processes.items()
+                    if self.identities.get(pid) == item["start_ticks"]}
+        while True:
+            before = set(selected)
+            selected.update(pid for pid, item in processes.items()
+                            if item["ppid"] in selected or any(
+                                value in self.markers.get(name, set())
+                                for name, value in markers[pid].items()))
+            for pid in selected:
+                for name, value in markers[pid].items():
+                    self.markers.setdefault(name, set()).add(value)
+            if before == selected:
+                break
+        proven = {pid for pid, item in processes.items()
+                  if (pid, item["start_ticks"]) in self.ancestor_identities}
+        while True:
+            before = set(proven)
+            proven.update(pid for pid, item in processes.items() if item["ppid"] in proven)
+            if before == proven:
+                break
+        self.ancestor_identities.update((pid, processes[pid]["start_ticks"]) for pid in proven)
+        self.current = {pid: {**processes[pid], "ancestor_observed": pid in proven} for pid in selected}
+        self.identities = {pid: item["start_ticks"] for pid, item in self.current.items()}
+        rss = sum(item["rss_bytes"] for item in self.current.values())
+        self.peak = max(self.peak, rss)
+        return {"current_rss_bytes": rss, "sampled_peak_rss_bytes": self.peak,
+                "current_processes": list(self.current.values()), "exact_peak_rss_bytes": None,
+                "basis": "same-UID leader/observed descendants/exact inherited job markers; PID birth bound; shared pages counted per process",
+                "gap": "polling may miss short peaks and can temporarily exceed the stop threshold"}

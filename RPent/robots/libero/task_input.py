@@ -214,6 +214,16 @@ def build_task_input(
             + "Motion tool: vla_execute(instruction, max_chunks). "
             "Use exposed observation tools to inspect current evidence."
         )
+    from robots.libero.skill_contracts import planner_contracts
+
+    skills = planner_contracts(context)
+    user += (
+        "\n\nCallable skill contracts (conditions use current public observations):\n"
+        + json.dumps(skills, ensure_ascii=False)
+        + "\nA deferred or rejected skill sends no actions. Inspect its reason before selecting a compatible next step. "
+        "An unknown action receipt requires execution reconciliation before another motion call. "
+        "A prior completion predicate can become invalid after a new observation; gripper closure alone does not establish holding."
+    )
     task_hint = context.get("planner_task_hint", "")
     if task_hint:
         user += (
@@ -256,4 +266,5 @@ def build_task_input(
         "guide_refs": guides,
         "information_scope": "runtime public prior only; no evaluator/release/sealed input",
         "project_learning": False,
+        "skill_contracts": skills,
     }

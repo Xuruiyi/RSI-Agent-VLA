@@ -1,5 +1,5 @@
 """Append-only facts and derived current relations."""
-from .contracts import EvidenceView, ExecutionEvent, record
+from .contracts import EvidenceView, ExecutionEvent
 from .storage import atomic_json
 
 
@@ -42,7 +42,18 @@ class EventLedger:
         if rho["rhoA"].get("type") != "fixed" and policy_ref == "fixed-all":
             policy_ref = bundle["rho_ref"]
         # The only selection operation is on L1. Every original L0 field remains.
-        return EvidenceView(view_id, bundle_id, facts, chosen, policy_ref)
+        selection = {
+            "target": "references_only", "mechanism": "caller_selection" if selected_media is not None else rho["rhoA"]["type"],
+            "policy_ref": policy_ref,
+            "probabilities": {ref: (None if selected_media is not None else float(ref in chosen))
+                              for ref in sorted({ref for fact in facts for ref in fact["media"]})},
+            "probability_basis": "unknown" if selected_media is not None else "deterministic_conditional_on_recorded_media_and_bound_policy",
+            "zero_coverage": sorted({ref for fact in facts for ref in fact["media"]} - set(chosen)),
+            "population_correction": "not_established; zero coverage cannot be recovered by weighting",
+            "persisted_bytes_saved": None,
+            "l0_integrity": evidence_integrity(facts),
+        }
+        return EvidenceView(view_id, bundle_id, facts, chosen, policy_ref, selection)
 
 
 class TaskState:
@@ -71,3 +82,26 @@ class TaskState:
         self.state["commits"].append([event_id, relation])
         atomic_json(self.path, self.state)
         return True
+
+
+def evidence_integrity(facts):
+    """Report gaps and missing facts without rewriting an original event."""
+    from collections import defaultdict
+
+    sequences = defaultdict(list)
+    for fact in facts:
+        sequences[(fact["run_id"], fact["episode_id"])].append(fact["sequence"])
+    gaps = []
+    for (run_id, episode_id), numbers in sorted(sequences.items()):
+        ordered = sorted(set(numbers))
+        previous = -1
+        for number in ordered:
+            if number > previous + 1:
+                gaps.append({"run_id": run_id, "episode_id": episode_id,
+                             "first_missing_sequence": previous + 1,
+                             "last_missing_sequence": number - 1})
+            previous = number
+    return {"sequence_gaps": gaps,
+            "missing_by_event": {fact["event_id"]: fact["missing"] for fact in facts if fact["missing"]},
+            "tail_completeness": "unknown_without_independent_closure",
+            "facts_modified": False}

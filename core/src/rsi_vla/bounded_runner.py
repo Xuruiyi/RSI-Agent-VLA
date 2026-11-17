@@ -33,6 +33,8 @@ def validate_permit(tools, transport, permit, *, root, output):
     from .task_policy import task_policy
 
     request = unpack(transport)
+    from .version_binding import validate_research_binding
+    validate_research_binding(tools, request)
     if request.get("task_policy", {}) != task_policy(tools.protocol):
         raise PermissionError("prepared task policy changed; prepare a new request")
     if (
@@ -440,6 +442,8 @@ def execute(
         "limits": permit["limits"],
         "storage_write_roots": permit.get("storage_write_roots", [str(output)]),
     }
+    if permit.get("request_scope") is not None:
+        context["request_scope"] = dict(permit["request_scope"])
     with lock_factory():
         from .process_accounting import StorageMeter
 
@@ -507,24 +511,20 @@ def execute(
                 "model_requests": len(admitted),
                 "tool_calls": 0,
             }
-            complete = (
-                bool(terminals)
-                and len(terminals) == len(admitted)
-                and all(
-                    type((e.get("usage") or {}).get(k)) is int
-                    for e in terminals
-                    for k in ("input_tokens", "output_tokens")
-                )
+            from .adapters.runtime_closure import request_usage
+
+            usage, missing = request_usage(events, expected_requests=len(admitted))
+            _, strict_missing = request_usage(
+                events, expected_requests=len(admitted), require_reasoning=True
+            )
+            complete = bool(terminals) and not any(
+                name in missing for name in ("input_tokens", "output_tokens")
             )
             if complete:
-                for name in ("input_tokens", "output_tokens"):
-                    costs[name] = sum(e["usage"][name] for e in terminals)
-                cached = [
-                    (e["usage"].get("input_tokens_details") or {}).get("cached_tokens")
-                    for e in terminals
-                ]
-                if all(type(v) is int for v in cached):
-                    costs["cached_input_tokens"] = sum(cached)
+                for name in ("input_tokens", "output_tokens", "cached_input_tokens",
+                             "reasoning_tokens", "total_tokens"):
+                    if usage[name] is not None:
+                        costs[name] = usage[name]
             from .process_accounting import accounted_storage_bytes, snapshot
 
             if permit.get('input_ref'):
@@ -545,6 +545,9 @@ def execute(
                     "costs": costs,
                     "raw_output_bytes_at_measurement": sum(snapshot([output]).values()),
                     "usage_complete": complete,
+                    "usage_complete_including_reasoning": bool(admitted) and not strict_missing,
+                    "missing_usage_including_reasoning": strict_missing,
+                    "reasoning_is_output_subset": True,
                     "cached_is_input_subset": True,
                     "missing_usage": "retain unknown; do not fill zero"
                     if not complete

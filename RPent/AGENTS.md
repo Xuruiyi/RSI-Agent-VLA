@@ -29,13 +29,13 @@ with documentation instead of assuming either is correct.
   documents, with entry points here. Update them when handing work between
   sessions; avoid duplicate status records.
 - When drafting RSI-Agent-VLA execution prompts, consult the
-  [task-prompt reference](../项目文档/04_实施路线与待决事项.md#51-任务提示词编写参考)
+  [task-prompt reference](../项目文档/04_实施路线与执行状态.md#51-任务提示词编写参考)
   for bounded autonomy, recovery, and completion criteria. Apply the current
   task's explicit authorization to all execution.
-  Prefer the linked [task-wide authorization guidance](../项目文档/04_实施路线与待决事项.md#阶段总授权与主代理自主调度):
+  Prefer the linked [task-wide authorization guidance](../项目文档/04_实施路线与执行状态.md#阶段总授权与主代理自主调度):
   user-approved hard totals with soft phase allocations, applicable permits
   issued within that authority, and bounded recovery for actual faulted jobs.
-  Use the linked [unexpected-problem guidance](../项目文档/04_实施路线与待决事项.md#目标范围内的异常处置与受控续程)
+  Use the linked [unexpected-problem guidance](../项目文档/04_实施路线与执行状态.md#目标范围内的异常处置与受控续程)
   for autonomous diagnosis, reversible repair, and preauthorized recovery.
   Ask again for material scope, hard-limit, expiry, or acceptance changes. This
   guidance grants no new dynamic authority and does not reopen closed campaigns.

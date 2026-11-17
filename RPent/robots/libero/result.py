@@ -44,12 +44,19 @@ def execution_health(runtime: dict) -> dict:
                 and (event.get("error") or event.get("execution_mask") is None)
                 or kind == "vla_segment_end"
                 and event.get("stop_reason") == "technical_error"
+                or kind == "skill_execution_result"
+                and (
+                    event.get("tool_status") == "failed"
+                    or event.get("action_feedback_unknown") is True
+                )
             ):
                 issues.append(event)
-            if kind == "vla_segment_end" and event.get("stop_reason") in {
-                "cancelled",
-                "budget",
-            }:
+            if (
+                kind == "vla_segment_end"
+                and event.get("stop_reason") in {"cancelled", "budget"}
+                or kind == "skill_execution_result"
+                and event.get("tool_status") == "interrupted"
+            ):
                 stops.append(event)
     except (OSError, ValueError, TypeError) as exc:
         missing.append(f"execution_events_unconfirmed:{type(exc).__name__}")
@@ -100,7 +107,11 @@ def finalize_run(context: RunFinalizationContext) -> Path:
             "recovery_criterion": None,
         }
         for segment in segments:
-            if segment.get("stop_reason") == "technical_error":
+            if (
+                segment.get("stop_reason") == "technical_error"
+                or segment.get("tool_status") == "failed"
+                or segment.get("action_feedback_unknown") is True
+            ):
                 health["issues"].append(segment)
                 health["status"] = "unresolved"
                 health["recovery_criterion"] = "not_defined_for_execution_faults"

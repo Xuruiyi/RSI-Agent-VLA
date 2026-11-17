@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import re
 import shutil
@@ -143,6 +144,73 @@ class MemoryManager:
         self._root = Path(root).resolve()
         self._memory_access = memory_access
         self._inbox_cell_tag = inbox_cell_tag
+        self._source_root = self._root
+        self._frozen = False
+        from rpent.session.runtime import runtime_context
+
+        context = runtime_context()
+        if context is not None and context.get("information_scope") in {
+            "release",
+            "evaluation",
+            "sealed",
+            "final",
+            "test",
+        }:
+            self._freeze(context)
+
+    def _freeze(self, context: dict[str, Any]) -> None:
+        """Bind all reads in an evaluation run to its first local snapshot."""
+        snapshot = Path(context["output_dir"]) / "frozen_memory"
+        receipt = snapshot / "snapshot.json"
+        identity = {
+            key: context[key]
+            for key in ("run_id", "episode_id", "bundle_id", "protocol_id")
+        }
+        binding = {
+            "identity": identity,
+            "memory_ref": context.get("memory_ref"),
+            "source_root": str(self._root),
+        }
+        if receipt.exists():
+            saved = json.loads(receipt.read_text())
+            if any(saved.get(key) != value for key, value in binding.items()):
+                raise ValueError("evaluation memory snapshot binding mismatch")
+        else:
+            snapshot.mkdir(parents=True, exist_ok=False)
+            for path in self._root.iterdir() if self._root.is_dir() else []:
+                if path.is_dir() and path.name in {
+                    "global",
+                    "task-family",
+                    "task-specific",
+                    "results",
+                }:
+                    shutil.copytree(path, snapshot / path.name)
+                elif path.is_file() and path.suffix == ".md":
+                    shutil.copy2(path, snapshot / path.name)
+            files = [path for path in snapshot.rglob("*") if path.is_file()]
+            for path in files:
+                path.chmod(0o444)
+            receipt.write_text(
+                json.dumps(
+                    {
+                        **binding,
+                        "files": [str(path.relative_to(snapshot)) for path in files],
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            receipt.chmod(0o444)
+        self._root = snapshot.resolve()
+        self._read_log = Path(context["output_dir"]) / "memory_reads.jsonl"
+        self._memory_access = "read_only"
+        self._frozen = True
+
+    def _require_mutable(self) -> None:
+        if self._frozen:
+            raise PermissionError(
+                "evaluation memory is frozen; corpus writes are isolated"
+            )
 
     @property
     def root(self) -> Path:
@@ -175,6 +243,18 @@ class MemoryManager:
 
     def record_read(self, path: Path, content: str) -> None:
         """Record the content delivered by a file tool, when audit is required."""
+        if self._frozen:
+            with self._read_log.open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "path": str(path),
+                            "snapshot_ref": str(self._root / "snapshot.json"),
+                            "utf8_bytes_delivered": len(content.encode("utf-8")),
+                        }
+                    )
+                    + "\n"
+                )
 
     def authorize_write(self, path: str | Path) -> Path:
         """Resolve a path and enforce the current run's memory write permissions."""
@@ -183,6 +263,10 @@ class MemoryManager:
     def _authorize(self, path: str | Path, *, write: bool) -> Path:
         repo_root = get_repo_root()
         resolved = (repo_root / path).resolve()
+        if self._frozen and resolved.is_relative_to(self._source_root):
+            if write:
+                self._require_mutable()
+            resolved = self._root / resolved.relative_to(self._source_root)
         if not resolved.is_relative_to(self._root):
             if resolved.is_relative_to((repo_root / "memory").resolve()):
                 raise PermissionError(
@@ -222,6 +306,7 @@ class MemoryManager:
         archived under _internal/conflicts. Solved audit/recipe pairs are
         copied to task-specific/. MEMORY.md is refreshed at the end.
         """
+        self._require_mutable()
         self.check_layout()
         root = self._root
         run_dir = Path(run_state_dir).resolve()
@@ -284,6 +369,11 @@ class MemoryManager:
                 if credited:
                     continue
                 merged_metadata = _merge_evidence(old_metadata, metadata)
+                revisions = internal / "revisions" / memory_id
+                revisions.mkdir(parents=True, exist_ok=True)
+                previous = revisions / f"before_{cell_tag}.md"
+                if not previous.exists():
+                    shutil.copy2(destination, previous)
                 destination.write_text(_render(merged_metadata, old_body))
                 result["evidence"] += 1
                 if body.strip() != old_body.strip():
@@ -321,6 +411,7 @@ class MemoryManager:
         index is rebuilt from the rest. Returns None and writes nothing when
         there are no leaves with parseable frontmatter.
         """
+        self._require_mutable()
         self.check_layout()
         root = self._root
         groups: dict[str, list[tuple[str, dict[str, Any]]]] = {
@@ -404,6 +495,7 @@ class MemoryManager:
         allow_patterns: tuple[str, ...] | None = None,
     ) -> Path:
         """Sync this memory corpus from its Hugging Face dataset."""
+        self._require_mutable()
         robot_name = self._root.name
         repo_id = os.environ.get(
             "RPENT_MEMORY_HF_REPO",

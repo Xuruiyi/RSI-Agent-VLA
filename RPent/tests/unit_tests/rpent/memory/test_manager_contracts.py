@@ -344,6 +344,15 @@ def test_memory_manager_accumulates_evidence_and_preserves_conflicting_prose(
         / f"task-family_libero10_task_t2__from_{second_cell}.md"
     )
     assert "Conflicting new prose." in conflict.read_text()
+    prior = (
+        memory_dir
+        / "_internal/revisions/task-family_libero10_task_t2"
+        / f"before_{second_cell}.md"
+    )
+    prior_metadata = yaml.safe_load(prior.read_text().split("---", 2)[1])
+    assert prior_metadata["evidence"]["cells"] == [first_cell]
+    assert prior_metadata["evidence"]["attempts"] == 1
+    assert "First published prose." in prior.read_text()
 
 
 def test_merge_memory_leaves_existing_plain_markdown_untouched(

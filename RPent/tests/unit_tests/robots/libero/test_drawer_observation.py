@@ -1,3 +1,17 @@
+# Copyright 2026 The RPent Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Private drawer snapshots use native worker joint lookup, never raw-observation keys."""
 
 import json
@@ -19,45 +33,48 @@ from robots.libero.drawer_observation import (
 from robots.libero.env_client import LiberoEnvClient
 from robots.libero.env_server import LiberoEnvFacade
 
-SIGNATURE = dict(
-    theta_ref="theta", processor_ref="processor", phi_ref="phi", code_ref="code"
-)
-CRITERION = dict(
-    schema="rsi-skill-drawer-open-criterion-v1",
-    criterion_ref="fixture-criterion",
-    region=DRAWER_REGION,
-    fixture=DRAWER_FIXTURE,
-    joint=DRAWER_JOINT,
-    joint_type="slide",
-    joint_range=[-0.16, 0.01],
-    open_threshold=-0.14,
-)
+SIGNATURE = {
+    "theta_ref": "theta",
+    "processor_ref": "processor",
+    "phi_ref": "phi",
+    "code_ref": "code",
+}
+CRITERION = {
+    "schema": "rsi-skill-drawer-open-criterion-v1",
+    "criterion_ref": "fixture-criterion",
+    "region": DRAWER_REGION,
+    "fixture": DRAWER_FIXTURE,
+    "joint": DRAWER_JOINT,
+    "joint_type": "slide",
+    "joint_range": [-0.16, 0.01],
+    "open_threshold": -0.14,
+}
 
 
 class Journal:
     def __init__(self, criterion=None, worker="pi0_doubled"):
         self.context = {
             **SIGNATURE,
-            "relation_control": dict(
-                schema="rsi-skill-routing-v1",
-                rho_ref="fixture-rho",
-                version_signature=SIGNATURE,
-                routes=[
-                    dict(
-                        route_id="drawer",
-                        task_key="old_drawer",
-                        state="old_drawer",
-                        max_chunks=24,
-                        selected_worker=worker,
-                        criterion=criterion or CRITERION,
-                    )
+            "relation_control": {
+                "schema": "rsi-skill-routing-v1",
+                "rho_ref": "fixture-rho",
+                "version_signature": SIGNATURE,
+                "routes": [
+                    {
+                        "route_id": "drawer",
+                        "task_key": "old_drawer",
+                        "state": "old_drawer",
+                        "max_chunks": 24,
+                        "selected_worker": worker,
+                        "criterion": criterion or CRITERION,
+                    }
                 ],
-            ),
+            },
         }
         self.events = []
 
     def identity(self):
-        return dict(run_id="r", episode_id="e", bundle_id="b", protocol_id="p")
+        return {"run_id": "r", "episode_id": "e", "bundle_id": "b", "protocol_id": "p"}
 
     def emit(self, kind, **fields):
         sequence = len(self.events)
@@ -78,20 +95,20 @@ def fixture_env():
         qpos=np.asarray([99.0, 99.0, 99.0, 99.0, 99.0, 99.0, 99.0, 0.0, 99.0])
     )
     site = SimpleNamespace(parent_name=DRAWER_FIXTURE, joints=[DRAWER_JOINT])
-    arm = dict(
-        type="OSC_POSE",
-        input_min=-1,
-        input_max=1,
-        output_min=[-0.05] * 6,
-        output_max=[0.05] * 6,
-        impedance_mode="fixed",
-        control_delta=True,
-    )
+    arm = {
+        "type": "OSC_POSE",
+        "input_min": -1,
+        "input_max": 1,
+        "output_min": [-0.05] * 6,
+        "output_max": [0.05] * 6,
+        "impedance_mode": "fixed",
+        "control_delta": True,
+    }
     native = SimpleNamespace(
         object_sites_dict={DRAWER_REGION: site},
         sim=SimpleNamespace(model=model, data=data),
         action_spec=(-np.ones(7), np.ones(7)),
-        robot_configs=[dict(controller_config=arm)],
+        robot_configs=[{"controller_config": arm}],
         check_success=Mock(
             side_effect=AssertionError("task success is not joint feedback")
         ),
@@ -282,19 +299,19 @@ def test_worker_lookup_failure_records_unknown_without_zero_or_success_fallback(
 
 def test_lift_path_keeps_existing_xyz_and_never_queries_drawer_property():
     exported, *_ = fixture_env()
-    criterion = dict(
-        schema="rsi-skill-lift-criterion-v1",
-        criterion_ref="lift",
-        object_position_key="target_pos",
-    )
+    criterion = {
+        "schema": "rsi-skill-lift-criterion-v1",
+        "criterion_ref": "lift",
+        "object_position_key": "target_pos",
+    }
     journal = Journal(criterion, worker="pi0_pick")
     facade, _, queried = facade_with(exported, journal)
     facade.raw_obs = Mock(
-        return_value=dict(
-            target_pos=[0.0, 0.0, 0.1],
-            robot0_eef_pos=[0.0, 0.0, 0.2],
-            robot0_gripper_qpos=[0.02, -0.02],
-        )
+        return_value={
+            "target_pos": [0.0, 0.0, 0.1],
+            "robot0_eef_pos": [0.0, 0.0, 0.2],
+            "robot0_gripper_qpos": [0.02, -0.02],
+        }
     )
     assert (
         facade.rsi_skill_observation(evidence=evidence(journal))["status"] == "recorded"
@@ -310,12 +327,12 @@ def test_client_returns_only_private_receipt_even_if_server_adds_measurements():
     client = object.__new__(LiberoEnvClient)
     client._client = SimpleNamespace(
         call=Mock(
-            return_value=dict(
-                source_sequence=3,
-                status="recorded",
-                qpos=-0.15,
-                measurements={"joint": {"qpos": -0.15}},
-            )
+            return_value={
+                "source_sequence": 3,
+                "status": "recorded",
+                "qpos": -0.15,
+                "measurements": {"joint": {"qpos": -0.15}},
+            }
         )
     )
     assert client.rsi_skill_observation(evidence={"route_id": "drawer"}) == {

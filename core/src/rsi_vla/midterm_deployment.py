@@ -506,7 +506,7 @@ def decide(registration_ref):
                 "candidate decision requires the truly activated qualified baseline"
             )
         manager.qualification(baseline.bundle_id, scope=protocol["scope"])
-        result = manager.evaluate(
+        result = manager._evaluate(
             key,
             candidate.candidate_id,
             candidate_result=candidate.result_id,

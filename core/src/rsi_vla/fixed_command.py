@@ -246,6 +246,10 @@ def _bound_record(path, scope_id, operation_id):
 
 def fixed_measurements(host, operation_id, template, report):
     """Read registered native markers and explicit model/download producers."""
+    from .cpu_command import is_cpu
+    if is_cpu(template):
+        from .cpu_command import measurements
+        return measurements(host, operation_id, template, report)
     permit = read(template["permit_ref"])
     kind = permit["kind"]
     scope_id = host.config["scope_id"]
@@ -520,6 +524,10 @@ def fixed_storage_context(host, operation, template):
 
 def fixed_result(host, operation, template):
     """Consume the original native terminal envelope and optional frozen stage verdict."""
+    from .cpu_command import is_cpu
+    if is_cpu(template):
+        from .cpu_command import result
+        return result(host, operation, template)
     path = Path(template["result_ref"])
     permit = read(template["permit_ref"])
     cost_path = Path(template.get("cost_receipt_ref", path))
@@ -715,7 +723,8 @@ def reconcile_fixed_backend(backend, operation):
     from .midterm_host import immutable_json
 
     host = backend.host
-    template = host.config["operations"][operation["operation_id"]]
+    from .host_inputs import consumer_inputs
+    _resolved, template = consumer_inputs(host, operation)
     path = backend._path(operation)
     if not path.exists():
         return None

@@ -61,6 +61,7 @@ class EvidenceView:
     l0: list[dict[str, Any]]
     selected_media: list[str]
     policy_ref: str
+    selection: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

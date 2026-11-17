@@ -139,13 +139,18 @@ class RuntimeClosureTests(unittest.TestCase):
     def test_launcher_saves_independent_unknown_when_backend_never_writes_result(self):
         from unittest.mock import patch
         from rsi_vla.runtime import execute_runtime
+        import test_runtime_plan
+        fixture = test_runtime_plan.RuntimePlanTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
         with tempfile.TemporaryDirectory() as d:
             output=Path(d)/'output'
-            identity=dict(run_id='r',episode_id='e',bundle_id='b',protocol_id='p')
-            context={**identity,'output_dir':str(output),'gpu_count':1,
-                     'limits':{'wall_seconds':900},'task':{'suite':'s','task':2,'seed':1}}
-            root=Path(__file__).resolve().parents[2]
-            plan=dict(blockers=[],context=context,cwd=str(root/'RPent'),command=['never-executed'],environment={})
+            plan=fixture.plan(run_id='r', output_dir=output)
+            context=plan['context']
+            identity={key:context[key] for key in ('run_id','episode_id','bundle_id','protocol_id')}
+            # Keep real frozen inputs; only the external process boundary is fake.
+            context.pop('task_input', None)
+            plan.update(blockers=[], command=['never-executed'], environment={})
             def fake_supervise(command, *, context_path):
                 self.assertEqual(command,['never-executed'])
                 report={'identity':identity,'cleanup_confirmed':True,'exit_code':1,'stop_reason':None}

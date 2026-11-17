@@ -30,6 +30,27 @@ import numpy as np
 from rpent.flywheel.episode import read_episode_arrays, validate_episode
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+SOURCE_KINDS = {
+    "authorized_demonstration",
+    "autonomous_execution",
+    "public_demonstration",
+    "teacher_data",
+    "independent_evaluation",
+}
+
+
+def episode_source(metadata: dict[str, Any]) -> str:
+    """Preserve declared provenance and isolate evaluation trajectories."""
+    scope = metadata.get(
+        "information_scope",
+        metadata.get("collection_config", {}).get("information_scope"),
+    )
+    if scope in {"release", "evaluation", "sealed", "final", "test"}:
+        return "independent_evaluation"
+    source = metadata.get("source_kind", "legacy_unspecified")
+    if source not in SOURCE_KINDS | {"legacy_unspecified"}:
+        raise ValueError(f"unknown episode source_kind: {source!r}")
+    return source
 
 
 def _features(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -62,11 +83,12 @@ def _successful_episodes(
         if any(metadata[key] != value for key, value in expected_metadata.items()):
             raise ValueError(f"episode metadata does not match its directory: {path}")
         if (
-            metadata.get("source_kind") == "autonomous_execution"
+            episode_source(metadata)
+            in {"autonomous_execution", "independent_evaluation"}
             and purpose != "diagnostic"
         ):
             raise ValueError(
-                "autonomous execution is preserved for diagnosis; demonstration training admission required"
+                "autonomous execution and independent evaluation require separate training admission"
             )
         if purpose == "diagnostic" or metadata["is_success"]:
             episodes.append((path, metadata))
@@ -154,9 +176,20 @@ def export_lerobot(
         "source_episode_ids": source_ids,
         "source_episode_paths": [str(path) for path, _ in episodes],
         "purpose": purpose,
-        "source_kind": "autonomous_execution"
-        if any(m.get("source_kind") == "autonomous_execution" for _, m in episodes)
-        else "legacy_unspecified",
+        "source_kind": next(iter({episode_source(m) for _, m in episodes}))
+        if len({episode_source(m) for _, m in episodes}) == 1
+        else "mixed",
+        "sources": [
+            {
+                "episode_id": m["episode_id"],
+                "path": str(path),
+                "source_kind": episode_source(m),
+                "provenance_refs": m.get("provenance_refs", []),
+                "information_scope": m.get("information_scope"),
+                "training_admission": m.get("training_admission", "not_admitted"),
+            }
+            for path, m in episodes
+        ],
         "training_admission": "not_admitted"
         if purpose == "diagnostic"
         else "requires_separate_demonstration_manifest",

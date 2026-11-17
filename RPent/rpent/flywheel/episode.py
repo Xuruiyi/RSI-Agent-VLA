@@ -379,7 +379,10 @@ class BatchedEpisodeWriter(EpisodeWriter):
                     "reset_setup_images_and_actions",
                     "nonreturned_rpc_transitions",
                 ],
-                "source_kind": "autonomous_execution",
+                "source_kind": "independent_evaluation"
+                if self._metadata.get("collection_config", {}).get("information_scope")
+                in {"release", "evaluation", "sealed", "final", "test"}
+                else "autonomous_execution",
                 "training_admission": "not_admitted",
                 "allowed_uses": ["preservation", "diagnosis"],
             },

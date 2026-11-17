@@ -900,6 +900,8 @@ def export_teacher_demonstrations(
         "checks_passed": all(all(row["checks"].values()) for row in checks),
         "training_admission": "pending_independent_quality_and_isolation_review",
     }
+    from ..collection import dataset_file_snapshot
+    audit["payload_snapshot"] = dataset_file_snapshot(manifest)
     _write(root / "payload-audit.json", audit)
     if not audit["checks_passed"]:
         raise ValueError("native teacher export changed source pre-action payloads")

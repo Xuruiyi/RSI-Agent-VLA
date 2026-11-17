@@ -11,6 +11,101 @@ class ReleaseManager:
         self.evaluations = evaluation_store
         self.active_path = self.records.root / "active.json"
 
+    def register_safety(self, registration_ref):
+        """Require protected operator/runtime evidence for this release domain."""
+        from .release_safety import register
+        return register(self, registration_ref)
+
+    def _safety(self, active, *, operation, safe_point, queues_empty=True, role='release'):
+        from .release_safety import check
+        return check(self, active=active, operation=operation, safe_point=safe_point,
+                     queues_empty=queues_empty, role=role)
+
+    def qualify_research_policy(self, qualification_id, *, exam_id):
+        """Consume and recompute an independently scored frozen-policy exam."""
+        from .meta_scoring import score_exam
+        value = self.evaluations.get("meta_exam_scores", exam_id)
+        registration = value["registration_snapshot"]
+        from .qualification_import import require_role
+        require_role(registration, "release")
+        if value != score_exam(registration, value["submissions_snapshot"], self.evaluations):
+            raise ValueError("independent meta examination facts changed")
+        snapshot = self.research.get("effective_psi", value["policy_snapshot_id"])
+        from .effective_psi import validate_policy_snapshot
+        validate_policy_snapshot(self.research, snapshot)
+        if snapshot != value["policy_snapshot"]:
+            raise ValueError("examined research policy snapshot changed")
+        record = {"qualification_id": qualification_id, "exam_id": exam_id,
+            "scope": value["scope"], "verdict": value["verdict"],
+            "release_eligible": value["release_eligible"], "exam_snapshot": value,
+            "policy_snapshot": snapshot, "bundle_snapshot": self.research.get("bundles", snapshot["bundle_id"])}
+        self.records.put("research_policy_qualifications", qualification_id, record)
+        return record
+
+    def _research_qualification(self, qualification_id):
+        from .meta_scoring import score_exam
+        value = self.records.get("research_policy_qualifications", qualification_id)
+        exam = self.evaluations.get("meta_exam_scores", value["exam_id"])
+        if (exam != value["exam_snapshot"]
+                or exam != score_exam(exam["registration_snapshot"], exam["submissions_snapshot"], self.evaluations)
+                or self.research.get("effective_psi", exam["policy_snapshot_id"]) != value["policy_snapshot"]
+                or self.research.get("bundles", value["bundle_snapshot"]["bundle_id"]) != value["bundle_snapshot"]):
+            raise ValueError("qualified research policy examination or bundle changed")
+        from .effective_psi import validate_policy_snapshot
+        validate_policy_snapshot(self.research, value["policy_snapshot"])
+        return value
+
+    def activate_research_policy(self, qualification_id, *, scope):
+        """Publish psi at the new-Job boundary without mutating existing Jobs."""
+        from .runtime import dynamic_job_lock
+        from .storage import atomic_json
+        with dynamic_job_lock():
+            value = self._research_qualification(qualification_id)
+            from .qualification_import import require_role
+            require_role(value["exam_snapshot"]["registration_snapshot"], "release")
+            if value["scope"] != scope or value["verdict"] != "accept" or value["release_eligible"] is not True:
+                raise ValueError("research policy has no applicable independent qualification")
+            path = self.records.root / "active_research_policy.json"
+            current = _json_reference(str(path)) if path.exists() else None
+            if current and current["qualification_ref"] == qualification_id:
+                return current
+            base = value["exam_snapshot"]["base_policy_snapshot_id"]
+            if current and current["policy_snapshot_id"] != base:
+                raise ValueError("research policy qualification baseline is stale")
+            active = {"scope": scope, "qualification_ref": qualification_id,
+                "policy_snapshot_id": value["policy_snapshot"]["snapshot_id"],
+                "bundle_id": value["bundle_snapshot"]["bundle_id"],
+                "revision": (current or {}).get("revision", 0) + 1}
+            self.records.put("research_policy_activations", qualification_id, {
+                "previous": current, "active": active})
+            boundary = value["exam_snapshot"]["registration_snapshot"]
+            self.records.put("research_policy_publications", qualification_id, {
+                "schema": "rsi-qualified-research-policy-v1", "active": active,
+                "bundle_snapshot": value["bundle_snapshot"], "policy_snapshot": value["policy_snapshot"],
+                "authorization_boundary": {key: boundary[key] for key in (
+                    "scope", "role_domains", "protected_paths", "isolation_acceptance_ref")}})
+            atomic_json(path, active)
+            return active
+
+    def research_policy(self, *, scope):
+        """Read only the trusted publication projection at a new Research Job."""
+        active = _json_reference(str(self.records.root / "active_research_policy.json"))
+        value = self.records.get("research_policy_publications", active["qualification_ref"])
+        from .qualification_import import require_role
+        require_role(value["authorization_boundary"], "research")
+        if (active != value["active"] or active["scope"] != scope
+                or active["bundle_id"] != value["bundle_snapshot"]["bundle_id"]
+                or active["policy_snapshot_id"] != value["policy_snapshot"]["snapshot_id"]
+                or self.research.get("bundles", active["bundle_id"]) != value["bundle_snapshot"]
+                or self.research.get("effective_psi", active["policy_snapshot_id"]) != value["policy_snapshot"]):
+            raise ValueError("effective research policy scope or binding mismatch")
+        return value["bundle_snapshot"], active
+
+    def candidate_archive(self, candidate_id, **filters):
+        """Inspect full composition and owned evaluation facts without activation."""
+        return self.research.candidate_archive(candidate_id,
+            evaluations=self.evaluations, release_records=self.records, **filters)
+
     def bootstrap(self, bundle_id, *, scope="offline"):
         self.research.get("bundles", bundle_id)
         if self.active_path.exists():
@@ -35,7 +130,8 @@ class ReleaseManager:
         value = {"qualification_id": qualification_id, "bundle_id":result.bundle_id,
             "bundle_snapshot":bundle, "protocol_id":result.protocol_id,"scope":protocol["scope"],
             "kind":"initial_effective", "result_refs":[result_id],
-            "requirements":requirements, "relative_gain_claimed":False}
+            "requirements":requirements, "input_snapshots":self._bundle_inputs(bundle), "protocol_snapshot":protocol,
+            "result_snapshot":result.__dict__, "relative_gain_claimed":False}
         self.records.put("qualifications", qualification_id, value)
         return value
 
@@ -123,6 +219,29 @@ class ReleaseManager:
                     self._validate_imported_qualification(value, role=consumer_role)
                 elif self.evaluations.get('protocols', value['protocol_id']).get('deployment_derivation'):
                     raise ValueError('derived initial qualification lacks trusted evidence import')
+                if value.get("input_snapshots") is not None and value["input_snapshots"] != self._bundle_inputs(bundle):
+                    raise ValueError("qualified bundle input artifacts changed")
+                if value.get("kind") == "evaluated_candidate":
+                    protocol = self.evaluations.get("protocols", value["protocol_id"])
+                    candidate = self.research.get("candidates", value["candidate_snapshot"]["candidate_id"])
+                    if (protocol != value["protocol_snapshot"] or candidate != value["candidate_snapshot"]
+                            or any(self.evaluations.get("results", key) != item
+                                   for key, item in value["result_snapshots"].items())):
+                        raise ValueError("qualified independent evaluation inputs changed")
+                    self._candidate_difference(Candidate(**candidate))
+                    repeated = Gate(protocol).evaluate(value["decision_ref"], Candidate(**candidate),
+                        current_bundle_id=candidate["base_bundle_id"],
+                        **{label: ExperimentResult(**value["result_snapshots"][key]) if key else None
+                           for label, key in value["evaluation_inputs"].items()})
+                    if repeated.__dict__ != self.records.get("decisions", value["decision_ref"]):
+                        raise ValueError("qualified decision differs from independent recomputation")
+                elif value.get("kind") == "initial_effective" and not value.get('evidence_import_id'):
+                    result = ExperimentResult(**self.evaluations.get("results", value["result_refs"][0]))
+                    protocol = self.evaluations.get("protocols", value["protocol_id"])
+                    if (value.get("protocol_snapshot", protocol) != protocol
+                            or value.get("result_snapshot", result.__dict__) != result.__dict__
+                            or _validate_initial_result(protocol, bundle, result) != value["requirements"]):
+                        raise ValueError("initial qualification evidence changed")
                 return value
         raise ValueError("bundle lacks applicable independent qualification")
 
@@ -144,6 +263,7 @@ class ReleaseManager:
                 or active["bundle_id"] != value["bundle_id"] or active["scope"] != value["scope"]
                 or safe_point not in {"task_boundary", "approved_safe_point"} or not queues_empty):
             raise ValueError("initial binding requires matching bootstrap and safe point")
+        self._safety(active, operation="initialize", safe_point=safe_point, queues_empty=queues_empty)
         atomic_json(self.active_path, {**active, "activation":"qualified_initial",
             "qualification_ref":qualification_id, "revision":active.get("revision",0)+1})
         return self.active()
@@ -152,18 +272,53 @@ class ReleaseManager:
         import json
         return json.loads(self.active_path.read_text(encoding="utf-8"))
 
+    def _bundle_inputs(self, bundle):
+        """Freeze local descriptors and policy records, without opening weights."""
+        from pathlib import Path
+        artifacts = {}
+        for name in ("theta_ref", "processor_ref", "phi_ref", "backend_ref", "code_ref", "diff_ref"):
+            reference = bundle.get(name)
+            if not reference:
+                continue
+            path = Path(reference.partition("#")[0])
+            if path.is_file() and path.suffix in {".json", ".py"}:
+                artifacts[name] = {"reference": reference, "source": path.read_text()}
+        return {"artifacts": artifacts, "records": {key:self.research.get(kind,bundle[key])
+            for key,kind in (("psi_ref","psi"),("rho_ref","rho"),("memory_ref","memory"))}}
+
+    def _candidate_difference(self, candidate):
+        """Verify actual candidate composition at the trusted release boundary."""
+        base = self.research.get("bundles", candidate.base_bundle_id)
+        target = self.research.get("bundles", candidate.bundle_id)
+        fields = {"theta_ref", "processor_ref", "phi_ref", "rho_ref", "psi_ref",
+                  "memory_ref", "backend_ref", "code_ref", "diff_ref"}
+        actual = {key: target.get(key) for key in fields if target.get(key) != base.get(key)}
+        if (not actual or actual != candidate.changes
+                or target.get("parent_bundle_id") != base["bundle_id"]
+                or target["protocol_id"] != candidate.protocol_id):
+            raise ValueError("candidate no longer matches its actual bundle difference")
+
     def evaluate(self, decision_id, candidate_id, *, candidate_result=None,
                  baseline_result=None, anchor_result=None):
+        from .runtime import dynamic_job_lock
+        with dynamic_job_lock():
+            return self._evaluate(decision_id, candidate_id, candidate_result=candidate_result,
+                baseline_result=baseline_result, anchor_result=anchor_result)
+
+    def _evaluate(self, decision_id, candidate_id, *, candidate_result=None,
+                 baseline_result=None, anchor_result=None):
         candidate = Candidate(**self.research.get("candidates", candidate_id))
+        self._candidate_difference(candidate)
         protocol = self.evaluations.get("protocols", candidate.protocol_id)
+        active = self.active()
         def result(key):
             return ExperimentResult(**self.evaluations.get("results", key)) if key else None
         decision = Gate(protocol).evaluate(decision_id, candidate,
-                    current_bundle_id=self.active()["bundle_id"],
+                    current_bundle_id=active["bundle_id"],
                     candidate_result=result(candidate_result), baseline_result=result(baseline_result),
                     anchor_result=result(anchor_result))
         self.records.put("decisions", decision_id, decision)
-        self.records.put("decision_bases", decision_id, self.active())
+        self.records.put("decision_bases", decision_id, active)
         if (decision.verdict == "accept" and decision.release_eligible
                 and protocol.get("comparison_only") is not True):
             bundle = self.research.get("bundles", decision.bundle_id)
@@ -171,7 +326,13 @@ class ReleaseManager:
                 "qualification_id":decision_id, "bundle_id":decision.bundle_id,
                 "bundle_snapshot":bundle, "protocol_id":decision.protocol_id, "scope":decision.scope,
                 "kind":"evaluated_candidate", "result_refs":decision.result_refs,
-                "decision_ref":decision_id, "relative_gain_claimed":True})
+                "decision_ref":decision_id, "relative_gain_claimed":True,
+                "protocol_snapshot":protocol, "candidate_snapshot":candidate.__dict__,
+                "input_snapshots":self._bundle_inputs(bundle),
+                "evaluation_inputs":{"candidate_result":candidate_result,
+                    "baseline_result":baseline_result, "anchor_result":anchor_result},
+                "result_snapshots":{key:self.evaluations.get("results", key)
+                    for key in decision.result_refs}})
         return decision
 
     def activate(self, decision_id, *, safe_point, queues_empty, scope="offline"):
@@ -187,20 +348,44 @@ class ReleaseManager:
         _require_deployment_protocol(self.evaluations.get("protocols", decision.protocol_id))
         if decision.verdict != "accept" or not decision.release_eligible:
             raise ValueError("decision has no release eligibility")
-        if decision.scope != scope or self.active()["scope"] != scope:
+        before = self.records.get("decision_bases", decision_id)
+        expected = {"bundle_id": decision.bundle_id, "scope": scope,
+                    "activation": decision_id, "revision": before.get("revision", 0) + 1}
+        current = self.active()
+        if decision.scope != scope or current["scope"] != scope:
             raise ValueError("deployment scope mismatch")
-        if (self.records.get("decision_bases", decision_id) != self.active() or
-                decision.base_bundle_id != self.active()["bundle_id"]):
+        receipt_path = self.records.path("activation_intents", decision_id)
+        if current == expected:
+            receipt = self.records.get("activation_intents", decision_id)
+            if (receipt.get("previous_active") != before or receipt.get("active") != expected
+                    or receipt.get("decision_snapshot") != decision.__dict__):
+                raise ValueError("activation receipt does not match effective revision")
+            self.records.put("activation_commits", decision_id, expected)
+            return current
+        if current != before or decision.base_bundle_id != current["bundle_id"]:
             raise ValueError("decision baseline is stale")
-        if safe_point not in {"task_boundary", "approved_safe_point"} or not queues_empty:
-            raise ValueError("activation needs a safe point and cleared queues")
-        self.qualification(self.active()["bundle_id"], scope=scope, protocol_id=decision.protocol_id)
+        evidence = self._safety(current, operation="activate", safe_point=safe_point,
+                                queues_empty=queues_empty)
+        self.qualification(current["bundle_id"], scope=scope, protocol_id=decision.protocol_id)
         self.qualification(decision.bundle_id, scope=scope, protocol_id=decision.protocol_id)
-        self.records.put("activations", decision_id, {
-            "bundle_id": decision.bundle_id, "previous": decision.base_bundle_id,
-            "decision_id": decision_id, "scope": scope, "safe_point": safe_point})
-        atomic_json(self.active_path, {"bundle_id": decision.bundle_id, "scope": scope,
-                                      "activation": decision_id, "revision": self.active().get("revision", 0) + 1})
+        receipt = {"bundle_id": decision.bundle_id, "previous": decision.base_bundle_id,
+                   "decision_id": decision_id, "scope": scope, "safe_point": safe_point,
+                   "previous_active": before, "active": expected,
+                   "decision_snapshot": decision.__dict__, "safety_evidence": evidence}
+        if receipt_path.exists():
+            saved = self.records.get("activation_intents", decision_id)
+            if any(saved.get(key) != receipt[key] for key in (
+                    "bundle_id", "previous", "decision_id", "scope", "safe_point",
+                    "previous_active", "active", "decision_snapshot")):
+                raise ValueError("pending activation receipt conflicts with original operation")
+        else:
+            self.records.put("activation_intents", decision_id, receipt)
+        self.records.put("activations", decision_id, {key: receipt[key] for key in (
+            "bundle_id", "previous", "decision_id", "scope", "safe_point")})
+        # A crash here leaves the immutable receipt; the same decision resumes
+        # only while the original active/revision and current safety still match.
+        atomic_json(self.active_path, expected)
+        self.records.put("activation_commits", decision_id, expected)
         return self.active()
 
     def rollback(self, target_bundle_id, *, safe_point, queues_empty, reason):
@@ -212,7 +397,15 @@ class ReleaseManager:
         if not reason or safe_point not in {"task_boundary", "approved_safe_point"} or not queues_empty:
             raise ValueError("rollback requires reason and safe point")
         # Only return to a bundle that was in this release's actual ancestry.
-        history = self.records.all("activations")
+        history = []
+        for value in self.records.all("activations"):
+            decision_id = value.get("decision_id")
+            if not decision_id:
+                raise ValueError("activation history lacks its decision identity")
+            if (not self.records.path("activation_intents", decision_id).exists()
+                    or self.records.path("activation_commits", decision_id).exists()
+                    or self.records.get("activation_intents", decision_id)["active"] == self.active()):
+                history.append(value)
         frontier = [self.active()["bundle_id"]]
         ancestors = set()
         while frontier:
@@ -224,6 +417,7 @@ class ReleaseManager:
         if target_bundle_id not in ancestors:
             raise ValueError("rollback target is not an actually activated ancestor")
         previous = self.active()
+        self._safety(previous, operation="rollback", safe_point=safe_point, queues_empty=queues_empty)
         if self.records.path('upgrade_decisions', previous['activation']).exists():
             from .upgrade_bridge import validate_upgrade_rollback
             validate_upgrade_rollback(self, target_bundle_id, reason=reason)
@@ -242,6 +436,7 @@ class ReleaseManager:
         if safe_point not in {"task_boundary", "approved_safe_point"}:
             raise ValueError("deployment selection requires a safe point")
         active = self.active()
+        self._safety(active, operation="inherit", safe_point=safe_point, role=consumer_role)
         if authorization_ref is not None:
             from .qualification_import import renewal_authorization
             renewal, qualification = renewal_authorization(authorization_ref, self,

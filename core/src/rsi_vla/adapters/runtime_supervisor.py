@@ -53,15 +53,20 @@ def _stop_group(process, grace, interval, complete_deadline):
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    # A live leader already establishes that the group remains. Scan for
+    # descendants only after its exit, keeping graceful cleanup out of repeated
+    # whole-host /proc scans.
     deadline = min(time.monotonic() + grace, complete_deadline - interval)
     while time.monotonic() < deadline:
         process.poll()
-        remaining = _live_group(pgid)
+        remaining = [pgid] if process.returncode is None else _live_group(pgid)
         if not remaining:
+            # Membership can disappear after the poll above; reap that exit too.
+            process.poll()
             return []
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
     process.poll()
-    if _live_group(pgid):
+    if process.returncode is None or _live_group(pgid):
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
@@ -69,12 +74,44 @@ def _stop_group(process, grace, interval, complete_deadline):
     # Reap before checking membership; an absent group needs no /proc scan.
     while time.monotonic() < complete_deadline:
         process.poll()
-        remaining = _live_group(pgid)
+        remaining = [pgid] if process.returncode is None else _live_group(pgid)
         if not remaining:
+            # Membership can disappear after the poll above; reap that exit too.
+            process.poll()
             return []
         time.sleep(min(interval, max(0, complete_deadline - time.monotonic())))
     process.poll()
     return _live_group(pgid)
+
+
+def _stop_measured_tree(process, meter, grace, interval, complete_deadline):
+    """Stop only birth-matched observed descendants; tag-only rows remain unknown."""
+    def signal_descendants(sig):
+        for row in meter.sample()["current_processes"]:
+            if row["pid"] == process.pid or not row.get("ancestor_observed"):
+                continue
+            try:
+                current = meter._process(row["pid"])
+                if (current["uid"] == row["uid"] == os.getuid()
+                        and current["start_ticks"] == row["start_ticks"]):
+                    os.kill(row["pid"], sig)
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+    signal_descendants(signal.SIGTERM)
+    remaining = _stop_group(process, grace, interval, complete_deadline)
+    until = min(time.monotonic() + grace, complete_deadline - interval)
+    while time.monotonic() < until and meter.sample()["current_processes"]:
+        time.sleep(min(interval, max(0, until - time.monotonic())))
+    signal_descendants(signal.SIGKILL)
+    while time.monotonic() < complete_deadline:
+        process.poll()
+        rows = meter.sample()["current_processes"]
+        if not rows:
+            return remaining
+        if not any(row.get("ancestor_observed") for row in rows):
+            break
+        time.sleep(min(interval, max(0, complete_deadline - time.monotonic())))
+    return sorted(set(remaining) | {row["pid"] for row in meter.sample()["current_processes"]})
 
 
 def supervise(command: list[str], *, context_path: str | Path,
@@ -82,17 +119,25 @@ def supervise(command: list[str], *, context_path: str | Path,
     """Launch one authorized job and stop its whole group on the first bound.
 
     The caller validates bundle/profile/protocol and holds the global job lock.
-    The context must carry dynamic_authorized=true and authorization_ref.
+    The context binds dynamic authority or an explicit live CPU model0 permit.
     No retries, deleted artifacts or follow-up jobs are performed.
     """
     from ..storage import atomic_json
     context_path = Path(context_path).resolve()
     context = json.loads(context_path.read_text(encoding='utf-8'))
-    if context.get('dynamic_authorized') is not True or not context.get('authorization_ref'):
+    if context.get('cpu_authorization_ref'):
+        from ..cpu_command import validate_supervision
+        validate_supervision(context)
+    elif context.get('dynamic_authorized') is not True or not context.get('authorization_ref'):
         raise PermissionError('runtime dynamic job is not authorized')
     if not command or poll_interval_s <= 0 or terminate_grace_s < 0:
         raise ValueError('invalid command or supervision interval')
     limits = context['limits']
+    memory_limit = context.get('memory_limit_bytes')
+    if memory_limit is not None and (type(memory_limit) is not int or memory_limit <= 0):
+        raise ValueError('memory_limit_bytes must be a positive integer')
+    memory_meter = None
+    memory_record = None
     wall_limit = limits['wall_seconds']
     storage_limit = limits['storage_bytes']
     gpu_limit = limits.get('gpu_seconds')
@@ -110,11 +155,11 @@ def supervise(command: list[str], *, context_path: str | Path,
     complete_seconds = min(wall_limit, gpu_limit / gpu_count) if gpu_limit is not None else wall_limit
     deadline_reason = 'gpu_seconds_envelope' if complete_seconds < wall_limit else 'wall_seconds'
     complete_deadline = started + complete_seconds
-    # Reserve graceful stop and one sample for forced termination inside the
+    # Reserve stop publication, graceful cleanup and a forced-termination sample inside the
     # whole-job budget. Very short offline fixtures use a proportional grace.
     effective_grace = min(terminate_grace_s, complete_seconds / 3)
     effective_interval = min(poll_interval_s, complete_seconds / 10)
-    stop_deadline = complete_deadline - effective_grace - effective_interval
+    stop_deadline = complete_deadline - effective_grace - 2 * effective_interval
     from ..process_accounting import StorageMeter
     state_ref = context.get('storage_meter_state_ref')
     storage_state = json.loads(Path(state_ref).read_text()) if state_ref and Path(state_ref).exists() else None
@@ -139,6 +184,11 @@ def supervise(command: list[str], *, context_path: str | Path,
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous_handlers[sig] = signal.getsignal(sig)
             signal.signal(sig, lambda _signum, _frame: interrupted.set())
+    def stop_owned():
+        if memory_meter:
+            return _stop_measured_tree(process, memory_meter, effective_grace, effective_interval, complete_deadline)
+        return _stop_group(process, effective_grace, effective_interval, complete_deadline)
+
     def publish_stop(reason):
         from ..storage import atomic_json
         atomic_json(output_dir/'runtime_stop.json', {
@@ -155,8 +205,11 @@ def supervise(command: list[str], *, context_path: str | Path,
             with (output_dir / 'backend.log').open('xb') as stream:
                 process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
                                            env=env, start_new_session=True)
+                if memory_limit is not None:
+                    from ..process_accounting import ProcessTreeMemoryMeter
+                    memory_meter = ProcessTreeMemoryMeter(process.pid, context_ref=context_path)
                 while True:
-                    elapsed = time.monotonic() - started
+                    memory_record = memory_meter.sample() if memory_meter else None
                     storage_record = storage_meter.sample()
                     scope_record = scope_meter.sample() if scope_meter else None
                     peak_storage = max(peak_storage, storage_record['cumulative_new_bytes_lower_bound'])
@@ -166,6 +219,8 @@ def supervise(command: list[str], *, context_path: str | Path,
                         stop_reason = 'external_interruption'
                     elif time.monotonic() >= stop_deadline:
                         stop_reason = deadline_reason
+                    elif memory_record and memory_record['current_rss_bytes'] >= memory_limit:
+                        stop_reason = 'memory_bytes'
                     elif peak_storage >= storage_limit:
                         stop_reason = 'storage_bytes'
                     elif scope_meter and scope_record['cumulative_new_bytes_lower_bound'] - scope_before >= context['scope_storage_remaining_bytes']:
@@ -175,15 +230,15 @@ def supervise(command: list[str], *, context_path: str | Path,
                     if stop_reason is not None:
                         publish_stop(stop_reason)
                         cleanup_started = time.monotonic()
-                        remaining = _stop_group(process, effective_grace, effective_interval, complete_deadline)
+                        remaining = stop_owned()
                         cleanup_seconds += time.monotonic()-cleanup_started
                         break
                     if process.poll() is not None:
-                        if _live_group(process.pid):
+                        if _live_group(process.pid) or memory_meter and memory_meter.sample()['current_processes']:
                             stop_reason = 'orphaned_backend_processes'
                             publish_stop(stop_reason)
                             cleanup_started = time.monotonic()
-                            remaining = _stop_group(process, effective_grace, effective_interval, complete_deadline)
+                            remaining = stop_owned()
                             cleanup_seconds += time.monotonic()-cleanup_started
                         break
                     time.sleep(min(effective_interval, max(0, stop_deadline - time.monotonic())))
@@ -193,16 +248,19 @@ def supervise(command: list[str], *, context_path: str | Path,
         publish_stop(stop_reason)
         if process is not None:
             cleanup_started = time.monotonic()
-            remaining = _stop_group(process, effective_grace, effective_interval, complete_deadline)
+            remaining = stop_owned()
     except BaseException:
         publish_stop("external_interruption")
         if process is not None:
-            _stop_group(process, effective_grace, effective_interval, complete_deadline)
+            stop_owned()
         raise
     finally:
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
     wall = time.monotonic() - started
+    if memory_meter:
+        memory_record = memory_meter.sample()
+        remaining = sorted(set(remaining) | {row['pid'] for row in memory_record['current_processes']})
     storage_record = storage_meter.sample()
     peak_storage = max(peak_storage, storage_record['cumulative_new_bytes_lower_bound'])
     report = {
@@ -218,7 +276,7 @@ def supervise(command: list[str], *, context_path: str | Path,
         'storage_accounting': storage_record,
         'poll_interval_s': effective_interval, 'terminate_grace_s': effective_grace,
         'complete_budget_seconds': complete_seconds,
-        'cleanup_reserved_seconds': effective_grace + effective_interval,
+        'cleanup_reserved_seconds': effective_grace + 2 * effective_interval,
         'gpu_device_seconds': None,
         'gpu_device_seconds_envelope': wall * gpu_count if type(gpu_count) is int else None,
         'gpu_measurement': 'allocated device wall-time envelope, not utilization telemetry',
@@ -226,6 +284,10 @@ def supervise(command: list[str], *, context_path: str | Path,
         'cleanup_confirmed': not remaining, 'remaining_process_ids': remaining,
         'missing': ['gpu_utilization_telemetry', 'backend_token_costs:see_runtime_costs.json'],
     }
+    if memory_limit is not None:
+        report['memory_limit_bytes'] = memory_limit
+        report['memory_accounting'] = memory_record
+        report['memory_enforcement'] = 'conservative sampled process-tree RSS stop; no kernel cgroup quota; tag-only residue is not signalled'
     report['business_storage_delta_bytes'] = storage_meter.cumulative - business_before
     if scope_meter:
         report['scope_storage_accounting'] = scope_meter.sample()

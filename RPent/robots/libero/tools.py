@@ -115,6 +115,7 @@ class LiberoPrimitives:
 
     def set_obs(self, obs):
         self._last_obs = obs
+        self._observation_epoch = getattr(self, "_observation_epoch", 0) + 1
         journal = getattr(self, "runtime_journal", None)
         self._observation_sequence = (
             journal.emit("observation_update", source="environment_observation")
@@ -132,6 +133,7 @@ class LiberoPrimitives:
 
     def reset(self):
         obs, info = self.env.reset()
+        self._execution_feedback_unknown = False
         if self.policy_kind == "wam":
             self.model.reset()
         self.set_obs(obs)
@@ -147,6 +149,15 @@ class LiberoPrimitives:
 
     def begin_primitive(self, name: str) -> None:
         self._active_primitive = name
+        self._skill_execution_totals = dict.fromkeys(
+            (
+                "predictions_started",
+                "predictions_completed",
+                "executed_steps",
+                "unknown_steps",
+            ),
+            0,
+        )
         if self._flywheel is not None:
             self._flywheel.begin_primitive(name)
 
@@ -159,6 +170,10 @@ class LiberoPrimitives:
 
     def _step_env(self, action) -> None:
         """Execute one env action between cancellation checkpoints."""
+        if getattr(self, "_execution_feedback_unknown", False):
+            raise RuntimeError(
+                "Action feedback is unknown; reconcile execution before further motion"
+            )
         self._check_cancelled()
         if hasattr(self._flywheel, "begin_dispatch"):
             self._flywheel.begin_dispatch(action, source=self._active_primitive)
@@ -220,7 +235,40 @@ class LiberoPrimitives:
         raw_obs: dict | None = None,
         segment_sequence: int | None = None,
     ):
+        """Retain prediction/send uncertainty even when a legacy skill raises."""
+        self._last_chunk_report = dict.fromkeys(
+            (
+                "predictions_started",
+                "predictions_completed",
+                "executed_steps",
+                "unknown_steps",
+            ),
+            0,
+        )
+        try:
+            return self._predict_chunk(
+                instruction, raw_obs=raw_obs, segment_sequence=segment_sequence
+            )
+        finally:
+            totals = getattr(self, "_skill_execution_totals", None)
+            if totals is not None:
+                for key in totals:
+                    totals[key] += self._last_chunk_report[key]
+            if self._last_chunk_report["unknown_steps"]:
+                self._execution_feedback_unknown = True
+
+    def _predict_chunk(
+        self,
+        instruction: str,
+        *,
+        raw_obs: dict | None = None,
+        segment_sequence: int | None = None,
+    ):
         """Predict and execute one chunk with a request-local task instruction."""
+        if getattr(self, "_execution_feedback_unknown", False):
+            raise RuntimeError(
+                "Action feedback is unknown; reconcile execution before further motion"
+            )
         self._check_cancelled()
         policy_obs = (self._last_obs if raw_obs is None else raw_obs).copy()
         policy_obs["task_descriptions"] = instruction

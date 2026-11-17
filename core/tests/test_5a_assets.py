@@ -444,21 +444,25 @@ class QualificationTest(unittest.TestCase):
 
     def test_stale_deployment_rejected_before_start_and_switch_uses_shared_lock(self):
         from rsi_vla.runtime import execute_runtime, dynamic_job_lock
+        import test_runtime_plan
 
+        fixture = test_runtime_plan.RuntimePlanTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
         active = self.release.active()
         output = self.root / "never-launched"
         atomic_json(
             self.release.active_path,
             {**active, "revision": active.get("revision", 0) + 1},
         )
-        plan = {
-            "blockers": [],
-            "context": {
-                "output_dir": str(output),
-                "release_binding": active,
-                "deployment_release_root": str(self.release.records.root),
-            },
-        }
+        # Freeze real Runtime inputs before exercising the independent release
+        # revision check. No service may start for the stale effective version.
+        plan = fixture.plan(output_dir=output)
+        plan["blockers"] = []
+        plan["context"].update(
+            release_binding=active,
+            deployment_release_root=str(self.release.records.root),
+        )
         with self.assertRaisesRegex(RuntimeError, "binding changed"):
             execute_runtime(plan)
         self.assertFalse(output.exists())

@@ -208,6 +208,60 @@ class RequestGate:
             "native state capture incomplete; no further Planner request forwarded"
         )
 
+    def scope_admission(self):
+        """Observe the existing task ledger before each actual HTTP forward."""
+        binding = self.context.get("request_scope")
+        if binding is None:
+            return
+        from datetime import datetime, timezone
+        from .runtime_closure import request_usage
+
+        scope = json.loads(Path(binding["scope_authorization_ref"]).read_text())
+        ledger = json.loads(Path(binding["accounting_ref"]).read_text())
+        policy = scope.get("token_policy", {})
+        if (scope.get("schema") != "rsi-midterm-scope-v1"
+                or scope.get("authorized") is not True or scope.get("status") != "active"
+                or scope.get("owner_uid") != os.getuid()
+                or datetime.now(timezone.utc) >= datetime.fromisoformat(scope["expires_at"].replace("Z", "+00:00"))
+                or policy.get("mode") != "observed_cumulative_stop_threshold"
+                or ledger.get("scope_id") != scope["scope_id"]
+                or ledger.get("limits") != scope["outer_limits"]):
+            raise PermissionError("request scope identity, policy or live authority mismatch")
+        record = ledger["reservations"][binding["operation_id"]]
+        budget = record["budget"]
+        if (record.get("status") != "active" or record.get("scope_id") != scope["scope_id"]
+                or record.get("actual", {}).get("model_requests", 0) != 0
+                or self.limit > budget.get("model_requests", 0)
+                or any(budget.get(name) != 0 for name in ("input_tokens", "output_tokens"))):
+            raise PermissionError("request does not match its active Host reservation")
+        from ..midterm_host import MidtermLedger
+
+        if MidtermLedger.blocking_unresolved_costs(
+                scope, ledger, for_model_operation=binding["operation_id"]):
+            raise PermissionError("scope costs unresolved; reconcile before next request")
+        usage, missing = request_usage(self.events, expected_requests=self.sent, require_reasoning=True)
+        terminals = [event for event in self.events if event["kind"] == "response_terminal"]
+        response_ids = [event.get("response_id") for event in terminals]
+        if (missing or len(terminals) != self.sent
+                or any(event.get("backend_model") != self.context["planner"]["model"] for event in terminals)
+                or any(not isinstance(value, str) or not value for value in response_ids)
+                or len(response_ids) != len(set(response_ids))):
+            raise PermissionError("request usage missing, inconsistent or unattributed; reconcile before next request")
+        used = ledger["used"]
+        if used["model_requests"] + self.sent >= ledger["limits"]["model_requests"]:
+            raise PermissionError("scope hard model request total exhausted")
+        if self.context.get("job_id") is not None and (
+                budget.get("research_requests", 0) < self.limit
+                or used["research_requests"] + self.sent >= ledger["limits"]["research_requests"]):
+            raise PermissionError("scope hard Research request total exhausted")
+        for name, threshold_name in (("input_tokens", "input_tokens_threshold"),
+                                     ("output_tokens", "output_tokens_including_reasoning_threshold")):
+            threshold = policy[threshold_name]
+            if threshold != ledger["limits"][name]:
+                raise PermissionError("observed token threshold differs from task registration")
+            if used[name] + usage[name] >= threshold:
+                raise PermissionError("scope observed token stop threshold reached: " + name)
+
     def admit(self, payload):
         with self.lock:
             expected = self.context["planner"]
@@ -298,6 +352,12 @@ class RequestGate:
                 raise PermissionError(
                     "model request budget exhausted; no request forwarded"
                 )
+            try:
+                self.scope_admission()
+            except (PermissionError, OSError, ValueError, KeyError, TypeError) as error:
+                self.rejected += 1
+                self.emit("rejected", reason="scope model admission paused", detail=str(error))
+                raise PermissionError(str(error)) from error
             self.sent += 1
             self.publish_live()
             self.emit(
@@ -629,7 +689,9 @@ class RequestGate:
                 "requests_rejected": self.rejected,
                 "request_limit": self.limit,
                 "hard_request_cap_enforced": True,
-                "token_policy": "observed_only",
+                "token_policy": ("observed_cumulative_stop_threshold"
+                    if self.context.get("request_scope") else "observed_only"),
+                "request_scope": self.context.get("request_scope"),
                 "upstream": self.upstream,
                 "active_requests_at_close": len(unfinished),
                 "unfinished_request_numbers": unfinished,

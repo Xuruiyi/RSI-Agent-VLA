@@ -234,6 +234,9 @@ def _add_cli_args(parser: argparse.ArgumentParser, use_dashboard: bool) -> None:
         help="e.g. libero_object_task, libero_spatial_swap",
     )
     parser.add_argument("--task", type=int, default=None, required=required)
+    parser.add_argument(
+        "--materialized-task", help="trusted task.json from an independent materializer"
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--collect-flywheel-data",
@@ -312,7 +315,17 @@ def _parse_config(args: argparse.Namespace) -> RunConfig:
     if args.task is None:
         raise ValueError("--task is required")
     planner = getattr(args, "planner", None)
-    args.libero_type = resolve_libero_type(args.suite, args.libero_type)
+    materialized = getattr(args, "materialized_task", None)
+    task_binding = None
+    if materialized:
+        from robots.libero.materialized_task import runtime_binding
+
+        task_binding = runtime_binding(materialized, seed=args.seed)
+        if args.suite != "materialized" or args.task != 0:
+            raise ValueError("materialized task requires --suite materialized --task 0")
+        args.libero_type = args.libero_type or "standard"
+    else:
+        args.libero_type = resolve_libero_type(args.suite, args.libero_type)
     am = select_am(args, "libero")
     wam = am if am.is_wam else None
     policy_kind = "wam" if wam else "vla"
@@ -431,6 +444,7 @@ def _parse_config(args: argparse.Namespace) -> RunConfig:
         output_dir=output_dir,
         prompt_vars=prompt_vars,
         task_desc={
+            **(task_binding["task_binding"] if task_binding else {}),
             "suite": args.suite,
             "task": args.task,
             "seed": args.seed,
@@ -524,10 +538,17 @@ def _spawn_env_server(
             "--port",
             str(port),
             "--parent-watch",
+            *(
+                ["--materialized-task", args.materialized_task]
+                if getattr(args, "materialized_task", None)
+                else []
+            ),
             *(["--cuda-device", str(device)] if device is not None else []),
         ],
         env_overrides={
-            "LIBERO_TYPE": resolve_libero_type(args.suite, args.libero_type),
+            "LIBERO_TYPE": args.libero_type
+            if getattr(args, "materialized_task", None)
+            else resolve_libero_type(args.suite, args.libero_type),
             "MUJOCO_GL": "egl",
             "ROBOT_PLATFORM": "LIBERO",
         },

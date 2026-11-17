@@ -296,6 +296,8 @@ def compose_index_clock_data(
         "checks_passed": True,
         "training_admission": "pending_independent_quality_and_isolation_review",
     }
+    from ..collection import dataset_file_snapshot
+    audit["payload_snapshot"] = dataset_file_snapshot(manifest)
     _write(output / "payload-audit.json", audit)
     validate_mixed_manifest(manifest, scope_id=registration["scope_id"])
     return {

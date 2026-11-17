@@ -117,11 +117,23 @@ def make_env(
     seed: int,
     suite_name: str = "libero_spatial",
     max_episode_steps: int = 10000,
+    materialized_task_ref: str | None = None,
 ) -> LiberoEnv:
     """Build a single-env LiberoEnv pinned to ``task_id`` / ``seed``."""
     from rlinf.envs.sim.libero.libero_env import LiberoEnv
     from rlinf.envs.sim.libero.utils import benchmark as _bench_mod
 
+    materialized = None
+    if materialized_task_ref:
+        from robots.libero.materialized_task import (
+            install_materialized_suite,
+            load_materialized_task,
+        )
+
+        materialized = load_materialized_task(materialized_task_ref)
+        if suite_name != "materialized" or task_id != 0:
+            raise ValueError("materialized environment identity mismatch")
+        install_materialized_suite(_bench_mod, materialized)
     suite = _bench_mod.get_benchmark(suite_name)()
     if not 0 <= task_id < suite.n_tasks:
         raise ValueError(
@@ -139,10 +151,13 @@ def make_env(
         max_episode_steps=max_episode_steps,
     )
     from robots.libero.action_spec import action_spec_libero_class
-
     from robots.libero.drawer_observation import drawer_observation_libero_class
 
     env_class = drawer_observation_libero_class(action_spec_libero_class(LiberoEnv))
+    if materialized:
+        from robots.libero.materialized_task import materialized_libero_class
+
+        env_class = materialized_libero_class(env_class, materialized)
     context = runtime_context()
     if context is not None:
         from robots.libero.runtime_evidence import observed_libero_class
@@ -379,6 +394,7 @@ def main():
     p.add_argument("--host", type=str, default="127.0.0.1")
     p.add_argument("--port", type=int, default=0)
     p.add_argument("--suite", type=str, default="libero_spatial")
+    p.add_argument("--materialized-task")
     p.add_argument("--task", type=int, default=9)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-episode-steps", type=int, default=10000)
@@ -429,6 +445,7 @@ def main():
         args.seed,
         suite_name=args.suite,
         max_episode_steps=args.max_episode_steps,
+        materialized_task_ref=args.materialized_task,
     )
     facade = LiberoEnvFacade(
         raw_env,

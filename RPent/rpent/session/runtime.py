@@ -142,6 +142,13 @@ class RuntimeJournal:
         rules_ref = context.get("runtime_rules_ref")
         if rules_ref:
             rules = json.loads(Path(rules_ref).read_text(encoding="utf-8"))
+            frozen_rules = (
+                context.get("execution_binding", {})
+                .get("references", {})
+                .get("phi_ref")
+            )
+            if frozen_rules is not None and rules != frozen_rules:
+                raise ValueError("runtime rules differ from the frozen job binding")
             cap, baseline = rules.get("chunk_steps"), rules.get("baseline_chunk_steps")
             version = rules.get("schema")
             expected = {"schema", "chunk_steps", "baseline_chunk_steps"}

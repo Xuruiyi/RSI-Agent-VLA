@@ -68,6 +68,10 @@ def evaluate_matrix(protocol, profile, manifest, *, result_id, bundle_id,
         task = tasks[task_key]
         task_matches = all(result.get('task', {}).get(key) == value for key, value in
                            dict(suite=task['suite'], task=task['task_id'], seed=seed).items())
+        if task.get('materialization_ref'):
+            task_matches = task_matches and all(
+                result.get('task', {}).get(key) == task.get(key)
+                for key in ('bddl_file', 'initial_state_ref', 'materialization_ref', 'native_success'))
         if not task_matches or any(result.get(key) != value for key, value in identity.items()):
             row['validity'] = 'invalid'
             all_identity = all_l0 = all_costs = False
@@ -176,7 +180,7 @@ def evaluate_matrix(protocol, profile, manifest, *, result_id, bundle_id,
             all_l0 = all_costs = False
             notes.append(f'{task_key}/{seed}: incomplete required L0/costs ({exc})')
     metrics = {}
-    for group in ('base', 'controlled', 'old'):
+    for group in {tasks[key]['group'] for key in split['task_keys']}:
         keys = [key for key in split['task_keys'] if tasks[key]['group'] == group]
         metrics['success_' + group] = sum(
             sum(row['outcome'] == 'success' and row['validity'] == 'valid' for row in assignments
@@ -193,6 +197,8 @@ def evaluate_matrix(protocol, profile, manifest, *, result_id, bundle_id,
         constraints['critical_progress'] = (False if False in values else True
             if len(values) == len(expected) and all(v is True for v in values) else None)
     actual_intervention={'information_scope':role, 'critical_progress_evidence': progress_reports}
+    if protocol.get('objective_comparison'):
+        actual_intervention['objective_comparison_schema'] = protocol['objective_comparison']['schema']
     def verified(keys):
         values = [report['checks'].get(key) for report in runtime_reports for key in keys]
         complete = len(runtime_reports) == len(expected)

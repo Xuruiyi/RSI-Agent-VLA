@@ -253,6 +253,35 @@ class ExecutionArmAcceptanceTests(unittest.TestCase):
             report = inspect_attempt(root)
             self.assertTrue(report["passed"], report)
 
+    def test_budget_interruption_requires_native_marker_and_matching_segment(self):
+        for case in ("marker_identity", "segment_cancelled", "unverified_result"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root, context, write = self.fixture(Path(directory), outcome="budget")
+                if case == "marker_identity":
+                    marker = json.loads((root / "budget_stop.json").read_text())
+                    marker["identity"]["run_id"] = "other-run"
+                    write("budget_stop.json", marker)
+                elif case == "segment_cancelled":
+                    path = root / "action_events.jsonl"
+                    events = [
+                        json.loads(line) for line in path.read_text().splitlines()
+                    ]
+                    for event in events:
+                        if (
+                            event.get("kind") == "vla_segment_end"
+                            and event.get("stop_reason") == "budget"
+                        ):
+                            event["stop_reason"] = "cancelled"
+                    path.write_text("\n".join(map(json.dumps, events)))
+                else:
+                    result = json.loads((root / "result.json").read_text())
+                    result["verified_budget_exhaustion"] = False
+                    write("result.json", result)
+                finalize_runtime(context)
+                report = inspect_attempt(root)
+                self.assertFalse(report["passed"], report)
+                self.assertFalse(report["checks"]["tool_l0_coverage"], report)
+
     def test_missing_request_stream_requires_a_bound_closed_zero_request_gate(self):
         for case in (
             "zero",

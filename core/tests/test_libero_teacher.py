@@ -353,7 +353,7 @@ class TeacherTests(unittest.TestCase):
         self.assertTrue(audit["checks_passed"])
         self.assertEqual(audit["frames_checked"], 2)
         exporter = json.loads(Path(result["exporter_ref"]).read_text())
-        self.assertEqual(exporter["source_kind"], "legacy_unspecified")
+        self.assertEqual(exporter["source_kind"], "authorized_demonstration")
         model = Path(
             "/home/xzh/RSI-Agent-VLA/checkpoints/RLinf-Pi05-LIBERO-130-fullshot-SFT"
         )

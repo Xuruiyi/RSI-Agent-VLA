@@ -374,6 +374,7 @@ def test_libero_prompt_matches_direct_action_enablement(
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("mode", ["delta", "absolute"])
 def test_libero_rpc_describes_active_controller(legacy, mode):
+    from robots.libero.action_spec import action_spec_libero_class
     from robots.libero.env_server import LiberoEnvFacade
     from rpent.tools.direct_action import direct_action_tool
 
@@ -394,14 +395,23 @@ def test_libero_rpc_describes_active_controller(legacy, mode):
         if legacy
         else {"composite_controller_config": {"body_parts": {"right": arm}}}
     )
-    attributes = {"action_spec": (low, high), "robot_configs": [config]}
+    native = SimpleNamespace(
+        env=SimpleNamespace(action_spec=(low, high), robot_configs=[config])
+    )
+
+    class Backend:
+        def get_env_fns(self):
+            return [lambda: native]
+
+    exported = action_spec_libero_class(Backend)().get_env_fns()[0]()
     worker = SimpleNamespace(
-        env_call=Mock(side_effect=lambda method, args, target: attributes[args[0]])
+        get_env_attr=Mock(side_effect=lambda name: getattr(exported, name))
     )
     facade = LiberoEnvFacade(
         SimpleNamespace(env=SimpleNamespace(workers=[worker])), meta={}
     )
     specs = facade.get_action_spec()
+    worker.get_env_attr.assert_called_once_with("rpent_action_spec")
     assert specs["default"]["low"] == low.tolist()
     assert specs["default"]["high"] == high.tolist()
     description = direct_action_tool(specs, lambda **kwargs: ToolResult()).description

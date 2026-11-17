@@ -1,12 +1,26 @@
+# Copyright 2026 The RPent Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Fixed native drawer-joint metadata read inside each pinned LIBERO worker."""
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from functools import partial
 from math import isfinite
 from numbers import Integral
-import time
 from typing import Any
 
 DRAWER_PROPERTY = "rpent_drawer_joint_observation"
@@ -18,22 +32,22 @@ DRAWER_JOINT = "wooden_cabinet_1_middle_level"
 
 def unknown_drawer_observation(reason: str) -> dict[str, Any]:
     """Describe unavailable measurement without manufacturing a zero joint state."""
-    return dict(
-        schema=DRAWER_SCHEMA,
-        status="unknown",
-        region=DRAWER_REGION,
-        fixture=None,
-        joint=None,
-        joints=None,
-        joint_type=None,
-        joint_type_id=None,
-        joint_range=None,
-        qpos=None,
-        qpos_address=None,
-        measured_at_ns=time.time_ns(),
-        missing=[reason],
-        source="native_worker.object_sites_dict/sim.model.get_joint_qpos_addr/sim.data.qpos",
-    )
+    return {
+        "schema": DRAWER_SCHEMA,
+        "status": "unknown",
+        "region": DRAWER_REGION,
+        "fixture": None,
+        "joint": None,
+        "joints": None,
+        "joint_type": None,
+        "joint_type_id": None,
+        "joint_range": None,
+        "qpos": None,
+        "qpos_address": None,
+        "measured_at_ns": time.time_ns(),
+        "missing": [reason],
+        "source": "native_worker.object_sites_dict/sim.model.get_joint_qpos_addr/sim.data.qpos",
+    }
 
 
 def _native_drawer_observation(worker_env: Any) -> dict[str, Any]:

@@ -86,10 +86,17 @@ class ThetaBTests(unittest.TestCase):
 
     def test_interface_batch_does_not_admit_training_or_autonomous_data(self):
         from rsi_vla.adapters.pi05_training import require_training_data_admission
-        for source in ("public_demonstration", "autonomous_execution"):
-            with self.assertRaisesRegex(PermissionError, "explicit demonstration-data admission"):
-                require_training_data_admission({"source_kind": source,
-                    "training_admission": "not_admitted_interface_batch_only"})
+        import test_training
+        fixture = test_training.TrainingTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        manifest = fixture.dataset()
+        manifest["training_admission"] = "not_admitted_interface_batch_only"
+        with self.assertRaisesRegex(PermissionError, "scoped independent demonstration-data admission"):
+            require_training_data_admission(manifest)
+        # Autonomous execution is rejected by the earlier provenance boundary.
+        with self.assertRaisesRegex(ValueError, "traceable demonstration source"):
+            require_training_data_admission({**manifest, "source_kind": "autonomous_execution"})
 
     def test_future_trainer_descriptor_reaches_real_loader_configuration(self):
         from rsi_vla.adapters.pi05_training import ACTION_CONTRACT

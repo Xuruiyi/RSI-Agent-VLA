@@ -81,6 +81,7 @@ def test_batches_interrupt_tail_masks_and_readback(tmp_path):
     metadata = validate_episode(path, spec=LIBERO_SPEC)
     assert metadata["alignment_complete"] is True
     assert metadata["training_admission"] == "not_admitted"
+    assert metadata["source_kind"] == "autonomous_execution"
     arrays = read_episode_arrays(path)
     assert arrays["states"][:, 0].tolist() == [0, 1, 2, 3]
     assert arrays["proposal_index"].tolist() == [0, 1, 2]
@@ -88,7 +89,7 @@ def test_batches_interrupt_tail_masks_and_readback(tmp_path):
         json.loads(line) for line in (path / "alignment.jsonl").read_text().splitlines()
     ]
     assert events[-1]["execution_mask"] == [True, True, True, False, False]
-    with pytest.raises(ValueError, match="demonstration"):
+    with pytest.raises(ValueError, match="require separate training admission"):
         export_lerobot(
             [path],
             spec=LIBERO_SPEC,

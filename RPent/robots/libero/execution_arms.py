@@ -270,6 +270,12 @@ def run_execution_arm(
             decisions.append(decision)
             if journal:
                 journal.emit("episode_execution_observation", arm=arm, **decision)
+            if segment.get("tool_status") in {"rejected", "deferred"}:
+                reason, diagnostic = (
+                    "skill_" + segment["tool_status"],
+                    segment.get("reason"),
+                )
+                break
             if segment.get("stop_reason") in {"technical_error", "budget", "cancelled"}:
                 reason, diagnostic = segment["stop_reason"], segment.get("diagnostic")
                 break
@@ -296,6 +302,16 @@ def run_execution_arm(
             else:
                 continue
             decision["edge"] = edge
+            decision["subgoal_outcome"] = (
+                "success" if condition and edge == "on_complete" else "unknown"
+            )
+            decision["advance_reason"] = (
+                "public_predicate"
+                if condition and edge == "on_complete"
+                else "observation_unknown"
+                if edge == "on_unknown"
+                else "fixed_allowance"
+            )
             if arm == "R":
                 next_stage = stage[edge]
             elif edge == "on_unknown":
@@ -332,7 +348,9 @@ def run_execution_arm(
             reason = "native_truncation"
     outcome = True if terminated else False if truncated else None
     status = (
-        "technical_error"
+        reason.removeprefix("skill_")
+        if reason in {"skill_rejected", "skill_deferred"}
+        else "technical_error"
         if reason == "technical_error"
         else "cancelled"
         if reason == "cancelled"

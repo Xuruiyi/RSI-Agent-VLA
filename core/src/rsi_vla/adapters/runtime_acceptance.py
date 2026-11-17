@@ -70,6 +70,105 @@ def _common_internal_tools(root, identity, events):
     return starts, ends, issues
 
 
+def _common_model_budget_interruption(root, identity, start, end, span, events, result, marker):
+    """Verify a drained common call stopped by the independent model gate."""
+    from robots.libero.execution_arms import validate_common_execution
+
+    context = read(root / 'runtime_context.json')
+    spec = validate_common_execution(context['common_execution'])
+    if (any(context.get(key) != value for key, value in identity.items())
+            or marker.get('reason') != 'model_requests' or marker.get('stop_after_inflight') is not True
+            or type(marker.get('limit')) is not int or marker['limit'] <= 0
+            or marker.get('observed') != marker['limit']
+            or marker['limit'] != context['limits']['model_requests']
+            or Path(marker['producer_events_ref']).resolve() != (root / 'model_requests.jsonl').resolve()
+            or not start['monotonic_ns'] <= marker['monotonic_ns'] <= end['monotonic_ns']):
+        return False
+    model_events = [json.loads(line) for line in (root / 'model_requests.jsonl').read_text().splitlines()]
+    producer = [event for event in model_events if event.get('sequence') == marker['sequence']]
+    gate = read(root / 'request_gate.json')
+    if (len(producer) != 1 or producer[0].get('kind') != 'budget_stop'
+            or any(producer[0].get('identity', {}).get(key) != value for key, value in identity.items())
+            or any(producer[0].get(key) != marker[key] for key in ('reason', 'limit', 'observed'))
+            or gate.get('cleanup_complete') is not True or gate.get('active_requests_at_close') != 0
+            or any(gate.get('identity', {}).get(key) != value for key, value in identity.items())
+            or gate.get('requests_forwarded') != marker['limit']
+            or sum(event.get('kind') == 'request_admitted' for event in model_events) != marker['limit']):
+        return False
+    logical = [event for event in span if event.get('kind') == 'common_execution_call_start']
+    closed = [event for event in span if event.get('kind') == 'common_execution_call_end']
+    if len(logical) != 1 or len(closed) != 1:
+        return False
+    logical, closed = logical[0], closed[0]
+    if (logical.get('common_execution') != spec
+            or type(logical.get('max_chunks')) is not int or not 2 <= logical['max_chunks'] <= 24
+            or closed.get('logical_call_sequence') != logical['sequence']
+            or closed.get('common_execution_call_sequence') != logical['sequence']
+            or closed.get('max_chunks') != logical['max_chunks']
+            or closed.get('stop_reason') != 'budget'
+            or closed.get('runtime_budget', {}).get('budget_stop') != marker):
+        return False
+    segments = [event for event in span if event.get('kind') == 'vla_segment_end']
+    chunks = [event for event in span if event.get('kind') == 'chunk_execution_end']
+    if (not segments or not chunks
+            or [event.get('segment_sequence') for event in closed.get('common_execution_segments', [])]
+               != [event.get('segment_sequence') for event in segments]
+            or any(event.get('unknown_steps') != 0 or event.get('error') for event in [closed, *segments, *chunks])
+            or any(event.get('stop_reason') != 'chunk_allowance' for event in segments)):
+        return False
+    predictions = sum(event.get('predictions_completed', 0) for event in chunks)
+    steps = sum(event.get('executed_steps', 0) for event in chunks)
+    if (predictions < 1 or steps != predictions * spec['action_prefix_steps']
+            or closed.get('predictions_started') != predictions or closed.get('predictions_completed') != predictions
+            or closed.get('executed_steps') != steps
+            or sum(event.get('predictions_completed', 0) for event in segments) != predictions
+            or sum(event.get('executed_steps', 0) for event in segments) != steps
+            or not any(event.get('kind') == 'tool_rejected' and event.get('tool') == 'vla_execute'
+                       and event.get('resource') == 'model_requests'
+                       and logical['sequence'] < event['sequence'] < closed['sequence'] for event in span)):
+        return False
+    for path in root.glob('codex_*.stream.jsonl'):
+        for line in path.read_text().splitlines():
+            sdk = json.loads(line)
+            payload = sdk.get('payload') or {}
+            if sdk.get('method') == 'error' or (payload.get('turn') or {}).get('error'):
+                return False
+    source = result['attempt_outcome_source']['planner_budget_stop']
+    notified = [event for event in events if event.get('sequence') == source.get('planner_event_sequence')]
+    usage = [event for event in events if event.get('kind') == 'planner_usage']
+    return (all(source.get(key) == value for key, value in marker.items())
+            and Path(source['budget_stop_ref']).resolve() == (root / 'budget_stop.json').resolve()
+            and Path(source['planner_events_ref']).resolve() == (root / 'action_events.jsonl').resolve()
+            and len(notified) == 1 and notified[0].get('kind') == 'planner_budget_stop'
+            and notified[0].get('budget_stop') == marker and notified[0]['sequence'] > end['sequence']
+            and all(notified[0].get(key) == value for key, value in identity.items())
+            and bool(usage) and all(event.get('stats', {}).get('sdk_errors') == [] for event in usage)
+            and execution_health(events, identity)['status'] == 'clear')
+
+
+def _closed_budget_interruption(root, identity, start, end, events):
+    """Recognize a native closed budget stop without clearing other tool faults."""
+    if end.get('tool') != 'vla_execute' or end.get('status') != 'interrupted':
+        return False
+    try:
+        result = read(root / 'result.json')
+        marker = read(root / 'budget_stop.json')
+        if (any(result.get(key) != value or marker.get('identity', {}).get(key) != value
+                for key, value in identity.items()) or not closed_native_failure(result)):
+            return False
+        span = [event for event in events
+                if start['sequence'] < event.get('sequence', -1) < end['sequence']
+                and all(event.get(key) == value for key, value in identity.items())]
+        local_budget = any(event.get('kind') == 'budget_stop' and event['sequence'] == marker['sequence']
+                           and event.get('reason') == marker['reason'] for event in span) and any(
+                               event.get('kind') == 'vla_segment_end' and event.get('stop_reason') == 'budget'
+                               for event in span)
+        return local_budget or _common_model_budget_interruption(
+            root, identity, start, end, span, events, result, marker)
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def audit_sdk_tools(output, identity, events=None, *, require_sdk=True):
     """Reconcile unique SDK item IDs with the identity-bound dispatcher log.
 
@@ -144,7 +243,8 @@ def audit_sdk_tools(output, identity, events=None, *, require_sdk=True):
         elif active.get(name):
             start = active[name].pop(0)
             spans.append((start, event))
-            if kind != 'tool_end' or event.get('status') != 'completed':
+            if (kind != 'tool_end' or event.get('status') != 'completed') and not (
+                    kind == 'tool_end' and _closed_budget_interruption(root, identity, start, event, events)):
                 issues.append(f'{name}: L0 tool did not complete successfully')
         else:
             issues.append(f'{name}: L0 terminal without start')

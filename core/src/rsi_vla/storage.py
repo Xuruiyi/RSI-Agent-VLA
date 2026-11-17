@@ -5,6 +5,7 @@ import gzip
 import os
 import re
 from pathlib import Path
+from uuid import uuid4
 from .contracts import record
 
 
@@ -17,9 +18,9 @@ def identifier(value):
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
+    temp = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     try:
-        with temp.open("w", encoding="utf-8") as handle:
+        with temp.open("x", encoding="utf-8") as handle:
             json.dump(value, handle, ensure_ascii=False, indent=2, allow_nan=False)
             handle.write("\n")
             handle.flush()
@@ -97,6 +98,11 @@ class ResearchStore(Records):
         for key in candidate.development_results:
             self.get("development_results", key)
         return self.put("candidates", candidate.candidate_id, candidate)
+
+    def candidate_archive(self, candidate_id, **filters):
+        """Resolve existing candidate, Bundle, costs and version applicability."""
+        from .candidate_archive import candidate_trace
+        return candidate_trace(self, candidate_id, **filters)
 
     def save_development_result(self, result):
         if result.role != "development":

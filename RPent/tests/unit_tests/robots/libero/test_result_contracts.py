@@ -75,12 +75,13 @@ def test_native_result_does_not_infer_success_from_planner_or_solved(
         assert result["native_result_source"]["terminated"] is None
 
 
-def test_toolkit_keeps_pick_heuristic_separate_from_native_result():
+def test_toolkit_keeps_pick_heuristic_separate_from_native_result(tmp_path):
     toolkit = LiberoToolkit.__new__(LiberoToolkit)
     toolkit._primitives = SimpleNamespace(
         env=SimpleNamespace(terminated=False, truncated=False)
     )
     toolkit._mode, toolkit._attempt = "evaluation", 1
+    toolkit._state_output_dir = tmp_path
     toolkit._state = SimpleNamespace(
         records=lambda: [
             StepRecord(

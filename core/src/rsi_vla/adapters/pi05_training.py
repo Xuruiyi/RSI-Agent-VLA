@@ -2,10 +2,10 @@
 import importlib.metadata
 import json
 import math
-from pathlib import Path
 import re
 import struct
-
+from pathlib import Path
+from typing import Any
 
 INSTALL_COMMITS = {
     "rlinf": "2348ece3df113874671478be1360ae3115b346e3",
@@ -55,7 +55,8 @@ def validate_dataset_manifest(manifest):
     for key in ("image", "wrist_image"):
         if features.get(key, {}).get("dtype") not in {"image", "video"}:
             raise ValueError(f"missing native dataset image: {key}")
-    if not isinstance(info.get("fps"), (int, float)) or info["fps"] <= 0:
+    if (type(info.get("fps")) not in (int, float)
+            or not math.isfinite(info["fps"]) or info["fps"] <= 0):
         raise ValueError("dataset fps required for horizon timestamps")
     episodes = manifest.get("episodes", [])
     if not episodes or len({e["episode_index"] for e in episodes}) != len(episodes):
@@ -158,7 +159,7 @@ def _native_recipe(*, dataset_root, model_path, norm_stats_path, output_root, ru
             "mixed_precision": {"param_dtype": None, "reduce_dtype": None, "buffer_dtype": None},
             "amp_autocast": {"enabled": False, "precision": "bf16"},
             "grad_scaler": {"enabled": False}}
-    return {"rsi_training": {"scope": "action_expert_only", "frozen": ["vision", "paligemma_expert_0", "token_embedder"],
+    return {"rsi_training": {"mode": "resource_pilot", "scope": "action_expert_only", "frozen": ["vision", "paligemma_expert_0", "token_embedder"],
                              "optimizer": "native_FP32MasterAdamW", "full_tuning": False},
             "cluster": {"num_nodes": 1, "component_placement": {"actor,env,rollout": "0-0"}},
             "runner": {"task_type": "sft", "max_epochs": -1, "max_steps": budget.max_steps,
@@ -207,7 +208,9 @@ def read_native_batch(recipe, manifest):
     import os
     if os.environ.get("HF_HUB_OFFLINE") != "1" or os.environ.get("CUDA_VISIBLE_DEVICES") != "":
         raise ValueError("batch check requires HF_HUB_OFFLINE=1 and CUDA_VISIBLE_DEVICES=''")
-    validate_dataset_manifest(manifest)
+    validation = validate_dataset_manifest(manifest)
+    if Path(recipe["data"]["train_data_paths"]).resolve() != Path(validation["dataset_root"]):
+        raise ValueError("native loader input differs from the reviewed dataset manifest")
     from omegaconf import OmegaConf
     from rlinf.data.datasets.openpi import build_openpi_sft_dataloader
     loader, _ = build_openpi_sft_dataloader(OmegaConf.create(recipe), 1, 0,
@@ -222,7 +225,10 @@ def read_native_batch(recipe, manifest):
     for key in ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"):
         if tuple(obs.images[key].shape) != (1, 3, 224, 224):
             raise ValueError(f"native batch image shape mismatch: {key}")
-    return {"action_shape": list(action_array.shape), "state_shape": list(obs.state.shape),
+    metadata = json.loads((Path(validation["dataset_root"]) / "meta/info.json").read_text())
+    return {"dataset": dataset_identity(manifest), "episodes": validation["episodes"],
+            "source_frames": metadata.get("total_frames"),
+            "action_shape": list(action_array.shape), "state_shape": list(obs.state.shape),
             "image_shape": [1, 3, 224, 224], "image_layout": "native_pytorch_NCHW",
             "evidence_level": "local_cpu_native_dataloader_batch"}
 
@@ -243,7 +249,9 @@ def inspect_checkpoint(model_path, norm_stats_path):
     stats = json.loads(norm.read_text())["norm_stats"]
     for key in ("state", "actions"):
         for field in ("mean", "std", "q01", "q99"):
-            if len(stats[key][field]) != 32:
+            if (len(stats[key][field]) != 32
+                    or any(type(value) not in (int, float) or not math.isfinite(value)
+                           for value in stats[key][field])):
                 raise ValueError("pi05 normalization dimension mismatch")
     return {"selected_weights": str(selected), "norm_stats": str(norm),
             "loader": "rlinf.models.embodiment.openpi.get_model(task=eval)",
@@ -325,7 +333,9 @@ def frozen_vlm_key(key):
 def static_training_memory(path):
     """Native key conversion on meta tensors, without model or weight allocation."""
     import torch
-    from rlinf.utils.ckpt_convertor.openpi.openpi_pytorch_to_openpi import old_to_new_state_dict
+    from rlinf.utils.ckpt_convertor.openpi.openpi_pytorch_to_openpi import (
+        old_to_new_state_dict,
+    )
     with Path(path).open("rb") as stream:
         header = json.loads(stream.read(struct.unpack("<Q", stream.read(8))[0]))
     raw = {k: torch.empty(v["shape"], device="meta") for k, v in header.items() if k != "__metadata__"}
@@ -532,9 +542,11 @@ def materialize_demonstration_subset(metadata_root, source_root, output, *, max_
     """
     import os
     import shutil
+
     import numpy as np
     os.environ.setdefault("HF_DATASETS_CACHE", str(Path(source_root).resolve() / "datasets-cache"))
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
     from ..training import artifact_size
     if os.environ.get("HF_HUB_OFFLINE") != "1" or os.environ.get("CUDA_VISIBLE_DEVICES") != "":
         raise ValueError("subset conversion is local CPU only")
@@ -613,18 +625,40 @@ def materialize_demonstration_subset(metadata_root, source_root, output, *, max_
 
 
 def native_verify_load(recipe_path, checkpoint_root, probes_path, report_path):
-    """Authorized real RPent-equivalent loader plus one decoded prediction."""
+    """Load through the actual RPent Pi05VLAFacade and decode one prediction."""
     _record_native_start("native_verify_load", recipe_path)
     import numpy as np
     import torch
-    from omegaconf import OmegaConf
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from rlinf.models.embodiment.openpi import get_model
-    from rpent.robots.components.pi05_vla_server import build_model_cfg, PI05_EMBODIMENTS
+
+    from rpent.robots.components.pi05_vla_server import Pi05VLAFacade
     recipe = json.loads(Path(recipe_path).read_text())
-    config = build_model_cfg(str(Path(checkpoint_root).resolve()), PI05_EMBODIMENTS["libero"])
-    config.openpi_data = {"norm_stats_path": recipe["actor"]["model"]["openpi_data"]["norm_stats_path"]}
-    model = get_model(config, torch_dtype=None).cuda().eval()
+    checkpoint_root = Path(checkpoint_root).resolve()
+    norm = Path(recipe["actor"]["model"]["openpi_data"]["norm_stats_path"]).resolve()
+    # A load-only context lets the actual service record its effective loader
+    # config and model identity. It grants no Runtime or benchmark execution.
+    import os
+
+    from ..storage import atomic_json
+    context_ref = Path(report_path).parent / "model-load-context.json"
+    run_id = recipe["runner"]["logger"]["experiment_name"]
+    plan = recipe["rsi_training"].get("learning_plan", {})
+    atomic_json(context_ref, {"schema_version": "1.0", "run_id": run_id,
+        "episode_id": "native-load-check", "bundle_id": plan.get("candidate_id", "unqualified-" + run_id),
+        "protocol_id": plan.get("protocol_id", "resource-pilot"), "profile_ref": str(Path(recipe_path).resolve()),
+        "theta_ref": str(checkpoint_root), "processor_ref": str(norm),
+        "output_dir": str(Path(report_path).parent.resolve()), "information_scope": "model_load_only"})
+    prior_context = os.environ.get("RSI_RUNTIME_CONTEXT")
+    os.environ["RSI_RUNTIME_CONTEXT"] = str(context_ref)
+    try:
+        facade = Pi05VLAFacade(model_path=str(checkpoint_root), embodiment="libero",
+                               norm_stats_path=str(norm))
+    finally:
+        if prior_context is None:
+            os.environ.pop("RSI_RUNTIME_CONTEXT", None)
+        else:
+            os.environ["RSI_RUNTIME_CONTEXT"] = prior_context
+    model = facade._model
     expected = torch.load(probes_path, map_location="cpu", weights_only=True)
     named = dict(model.named_parameters())
     equality = {key: torch.equal(named[key].detach().cpu(), tensor) for key, tensor in expected.items()}
@@ -639,14 +673,22 @@ def native_verify_load(recipe_path, checkpoint_root, probes_path, report_path):
     wire = {"main_images": image("image"), "wrist_images": image("wrist_image"),
             "extra_view_images": None, "states": np.asarray(sample["state"], dtype=np.float32)[None],
             "task_descriptions": [sample["task"]]}
-    with torch.no_grad():
-        actions, _ = model.predict_action_batch(wire, mode="eval")
-    actions = actions.detach().cpu().numpy()
+    actions = facade.predict(wire, options={"mode": "eval"})
+    layout = inspect_checkpoint(checkpoint_root, norm)
+    loaded_weights = Path(layout["selected_weights"])
     if actions.shape != (1, 5, 7) or not np.isfinite(actions).all():
         raise ValueError("actual runtime decoded action shape/finite check failed")
     report = {"actual_model_load": "passed", "saved_probe_equal": equality,
               "prediction_shape": list(actions.shape), "prediction_finite": True,
-              "loader_config": OmegaConf.to_container(config, resolve=True),
+              "loader_config": facade._rsi_model_evidence["effective_config"],
+              "service_evidence_ref": str(facade._rsi_model_evidence_path),
+              "service_class": type(facade).__module__ + "." + type(facade).__name__,
+              "model_class": type(model).__module__ + "." + type(model).__name__,
+              "model_path": str(checkpoint_root), "norm_stats_path": str(norm),
+              "processor_snapshot": json.loads(norm.read_text()),
+              "weights_identity": {"path": str(loaded_weights.resolve()),
+                  "bytes": loaded_weights.stat().st_size,
+                  "mtime_ns": loaded_weights.stat().st_mtime_ns},
               "decoded_action_contract": ACTION_CONTRACT,
               "prediction": actions.tolist(), "prediction_count": 1,
               "task_evaluation": "not_run", "cuda_peak_allocated_bytes": torch.cuda.max_memory_allocated(),
@@ -657,8 +699,9 @@ def native_verify_load(recipe_path, checkpoint_root, probes_path, report_path):
 
 def measured_worker_class():
     """Construct the worker class without model creation or Ray initialization."""
-    import time
     import resource
+    import time
+
     import torch
     from rlinf.workers.sft.fsdp_vla_sft_worker import FSDPVlaSftWorker
 
@@ -790,6 +833,7 @@ def _record_native_start(entrypoint, recipe_path):
     """Publish an exact adapter-process start, including optional-import failures."""
     import os
     from datetime import datetime, timezone
+
     from ..training import JOB_MARKER
     root = Path(os.environ[JOB_MARKER]).resolve()
     recipe = json.loads(Path(recipe_path).read_text())
@@ -815,6 +859,7 @@ def prepare_cpu_demonstrations(*, metadata_root, output, permit, model_path, nor
     """
     import os
     import shutil
+
     from ..training import TrainingBudget
     root = Path(output).resolve()
     if root.exists():
@@ -867,6 +912,7 @@ def audit_demonstration_payload(manifest):
     orientation and evaluation isolation using independent evidence.
     """
     import io
+
     import numpy as np
     import pyarrow.parquet as pq
     from PIL import Image
@@ -909,6 +955,7 @@ def audit_demonstration_payload(manifest):
                   "normalized_actions_and_binary_gripper": True,
                   "contiguous_frame_and_episode_indices": True,
                   "timestamps_match_fps": True, "source_states_actions_equal": True,
+                  "executed_transitions_only": True,
                   "decoded_rgb_shape_and_nonconstant": True, "source_decoded_pixels_equal": True}
         minima, maxima = np.full(7, np.inf), np.full(7, -np.inf)
         for frame, (row, original_row) in enumerate(zip(rows, originals)):
@@ -917,14 +964,17 @@ def audit_demonstration_payload(manifest):
                 state.shape == (8,) and action.shape == (7,)
                 and bool(np.isfinite(state).all()) and bool(np.isfinite(action).all()))
             checks["normalized_actions_and_binary_gripper"] &= (
-                bool((np.abs(action) <= 1.00001).all()) and float(action[6]) in {-1.0, 1.0})
+                action.shape == (7,) and bool((np.abs(action) <= 1.00001).all()) and float(action[6]) in {-1.0, 1.0})
             checks["contiguous_frame_and_episode_indices"] &= (
                 row["frame_index"] == frame and row["episode_index"] == index)
             checks["timestamps_match_fps"] &= abs(row["timestamp"] - frame / info["fps"]) < 1e-4
+            mask = row.get("execution_mask", True)
+            checks["executed_transitions_only"] &= bool(np.asarray(mask).all())
             checks["source_states_actions_equal"] &= (
                 bool(np.array_equal(state, original_row["state"]))
                 and bool(np.array_equal(action, original_row["actions"])))
-            minima, maxima = np.minimum(minima, action), np.maximum(maxima, action)
+            if action.shape == (7,):
+                minima, maxima = np.minimum(minima, action), np.maximum(maxima, action)
             for camera in ("image", "wrist_image"):
                 image, source_image = decode(row[camera], root), decode(original_row[camera], source_root)
                 checks["decoded_rgb_shape_and_nonconstant"] &= (
@@ -935,7 +985,9 @@ def audit_demonstration_payload(manifest):
         reports.append({"episode_index": index, "source_episode_index": original,
                         "task": episode["task"], "frames_checked": len(rows),
                         "checks": checks, "action_min": minima.tolist(), "action_max": maxima.tolist()})
+    from ..collection import dataset_file_snapshot
     return {"schema": "rsi-demonstration-payload-audit-v1", "dataset": dataset_identity(manifest),
+            "payload_snapshot": dataset_file_snapshot(manifest),
             "episodes": reports, "frames_checked": sum(row["frames_checked"] for row in reports),
             "checks_passed": not errors, "errors": errors,
             "training_admission": "pending_independent_quality_and_isolation_review",
@@ -954,6 +1006,10 @@ def require_training_data_admission(manifest, *, admission_ref=None, scope_id=No
             or receipt.get("protocol_id") != protocol_id or receipt.get("reviewer_id") != authority):
         raise PermissionError("training data admission identity/version/authority mismatch")
     identity = dataset_identity(manifest)
+    if receipt.get("payload_snapshot") is not None:
+        from ..collection import dataset_file_snapshot
+        if receipt["payload_snapshot"] != dataset_file_snapshot(manifest):
+            raise PermissionError("admitted dataset payload changed after review")
     if receipt.get("dataset") != identity:
         raise PermissionError("training admission does not cover all consumed dataset episodes")
     if manifest.get("derivation_kind") == "index_clock_composition":
@@ -999,3 +1055,224 @@ def require_training_data_admission(manifest, *, admission_ref=None, scope_id=No
             if not Path(reference).is_file():
                 raise PermissionError("review evidence unavailable: " + reference)
     return receipt
+
+
+def prepare_admitted_training(
+    *,
+    manifest_ref: str | Path,
+    admission_ref: str | Path,
+    scope_id: str,
+    protocol_id: str,
+    reviewer_id: str,
+    model_path: str | Path,
+    norm_stats_path: str | Path,
+    output_root: str | Path,
+    run_id: str,
+    budget: Any,
+    learning_plan: dict[str, Any] | None = None,
+    read_batch: bool = True,
+) -> dict[str, Any]:
+    """Materialize native trainer inputs only from the independently admitted set."""
+    import shutil
+
+    from ..storage import atomic_json
+
+    manifest = json.loads(Path(manifest_ref).read_text())
+    admission = require_training_data_admission(
+        manifest,
+        admission_ref=admission_ref,
+        scope_id=scope_id,
+        protocol_id=protocol_id,
+        authority=reviewer_id,
+    )
+    root = Path(output_root).resolve()
+    if root.exists():
+        raise FileExistsError(
+            "training preparation already exists; consume its receipt"
+        )
+    installed = verify_installed_sources()
+    checkpoint = inspect_checkpoint(model_path, norm_stats_path)
+    root.mkdir(parents=True)
+    import os
+
+    os.environ.update(
+        HF_HUB_OFFLINE="1",
+        HF_DATASETS_OFFLINE="1",
+        CUDA_VISIBLE_DEVICES="",
+        JAX_PLATFORMS="cpu",
+        HF_DATASETS_CACHE=str(root / "datasets-cache"),
+    )
+    norm = root / "processor/physical-intelligence/libero/norm_stats.json"
+    norm.parent.mkdir(parents=True)
+    shutil.copyfile(checkpoint["norm_stats"], norm)
+    builder = build_learning_recipe if learning_plan else build_recipe
+    kwargs = {"learning_plan": learning_plan} if learning_plan else {}
+    if learning_plan and learning_plan["data_admission_ref"] != str(admission_ref):
+        raise PermissionError("learning plan binds a different admission")
+    recipe = builder(
+        dataset_root=manifest["dataset_root"],
+        model_path=model_path,
+        norm_stats_path=norm,
+        output_root=root,
+        run_id=run_id,
+        budget=budget,
+        **kwargs,
+    )
+    native = inspect_native_config(recipe)
+    batch = read_native_batch(recipe, manifest) if read_batch else None
+    report = {
+        "schema": "rsi-admitted-training-preparation-v1",
+        "scope_id": scope_id,
+        "protocol_id": protocol_id,
+        "run_id": run_id,
+        "dataset": admission["dataset"],
+        "admission_ref": str(Path(admission_ref).resolve()),
+        "manifest_ref": str(Path(manifest_ref).resolve()),
+        "recipe_ref": str(root / "recipe.json"),
+        "dataset_root": recipe["data"]["train_data_paths"],
+        "norm_stats_path": str(norm),
+        "processor_snapshot": json.loads(norm.read_text()),
+        "native_config": native,
+        "installed": installed,
+        "batch": batch,
+        "training_steps": 0,
+        "status": "prepared_pending_training_authorization",
+    }
+    for name, value in (
+        ("recipe.json", recipe),
+        ("dataset-manifest.json", manifest),
+        ("preparation.json", report),
+        (
+            "training-permit-proposal.json",
+            {
+                "kind": "pi05-training-learning"
+                if learning_plan
+                else "pi05-training-pilot",
+                "authorized": False,
+                "cuda_device": None,
+                "run_id": run_id,
+                "dataset_root": recipe["data"]["train_data_paths"],
+                "model_path": str(Path(model_path).resolve()),
+                "budget": budget.__dict__,
+            },
+        ),
+    ):
+        atomic_json(root / name, value)
+    return {**report, "artifact_ref": str(root / "preparation.json")}
+
+
+def resolve_native_training_output(
+    *,
+    prepared_root: str | Path,
+    artifact_root: str | Path,
+    permit: dict[str, Any],
+    supervision: dict[str, Any],
+    python_executable: str,
+) -> dict[str, Any]:
+    """Resolve completed native saves; partial saves never become a theta export."""
+    root, artifact = Path(prepared_root).resolve(), Path(artifact_root).resolve()
+    recipe = json.loads((root / "recipe.json").read_text())
+    if (
+        supervision.get("returncode") != 0
+        or supervision.get("stop_reason") is not None
+        or supervision.get("cleanup_confirmed") is not True
+        or supervision.get("resource_limits_satisfied") is not True
+    ):
+        raise ValueError(
+            "native training process did not complete within its lifecycle limits"
+        )
+    step = recipe["runner"]["max_steps"]
+    if step != permit["budget"]["max_steps"]:
+        raise ValueError("trainer recipe and permit step counts differ")
+    update_ref = artifact / "weight-update-check.json"
+    update = json.loads(update_ref.read_text())
+    if (
+        update.get("step") != step
+        or update.get("nonzero_sampled_weight_update") is not True
+        or not update.get("sampled_frozen_parameters_equal")
+        or not all(
+            value is True
+            for value in update["sampled_frozen_parameters_equal"].values()
+        )
+    ):
+        raise ValueError(
+            "native final-step weight update or frozen parameter evidence missing"
+        )
+    # Resolve an existing trainer directory, then verify its native loader layout.
+    candidates = [
+        path
+        for path in (artifact / "checkpoints").glob("global_step_*")
+        if path.is_dir() and path.name == f"global_step_{step}"
+    ]
+    if len(candidates) != 1:
+        raise ValueError("completed native final checkpoint is unavailable")
+    norm = recipe["actor"]["model"]["openpi_data"]["norm_stats_path"]
+    preparation = root / "preparation.json"
+    if preparation.exists():
+        saved = json.loads(preparation.read_text())
+        if (
+            saved.get("processor_snapshot") is not None
+            and json.loads(Path(norm).read_text()) != saved["processor_snapshot"]
+        ):
+            raise ValueError("prepared processor changed during training")
+    if not candidates[0].resolve().is_relative_to(artifact):
+        raise ValueError(
+            "native checkpoint path escapes the supervised artifact domain"
+        )
+    handoff = deployment_handoff(
+        candidates[0], norm, python_executable=python_executable
+    )
+    weights = Path(handoff["selected_weights"])
+    handoff.update(
+        schema="rsi-native-training-handoff-v1",
+        scope_id=permit["scope_id"],
+        operation_id=permit["operation_id"],
+        run_id=permit["run_id"],
+        recipe_ref=str(root / "recipe.json"),
+        source_versions=verify_installed_sources(),
+        weights_identity={
+            "path": str(weights.resolve()),
+            "bytes": weights.stat().st_size,
+            "mtime_ns": weights.stat().st_mtime_ns,
+        },
+        processor_snapshot=json.loads(Path(norm).read_text()),
+    )
+    handoff["model_descriptor"].update(
+        training_scope="action_expert_only",
+        training_recipe_ref=str(root / "recipe.json"),
+        weight_update_ref=str(update_ref),
+    )
+    return handoff
+
+
+def verify_native_load_receipt(
+    report: dict[str, Any], handoff: dict[str, Any]
+) -> dict[str, Any]:
+    """Check actual service identity and decoded compatibility independently of gain."""
+    descriptor = handoff["model_descriptor"]
+    if (
+        report.get("actual_model_load") != "passed"
+        or report.get("prediction_shape") != [1, 5, 7]
+        or report.get("prediction_finite") is not True
+        or report.get("decoded_action_contract") != descriptor["action_contract"]
+        or not report.get("saved_probe_equal")
+        or not all(value is True for value in report["saved_probe_equal"].values())
+    ):
+        raise ValueError("native loader compatibility/probe verification failed")
+    for key in ("model_path", "norm_stats_path"):
+        if Path(report.get(key, "")).resolve() != Path(descriptor[key]).resolve():
+            raise ValueError("native model/processor path drift: " + key)
+    if report.get("processor_snapshot") != handoff.get("processor_snapshot"):
+        raise ValueError("native processor content mismatch")
+    weights = Path(handoff["selected_weights"])
+    identity = {
+        "path": str(weights.resolve()),
+        "bytes": weights.stat().st_size,
+        "mtime_ns": weights.stat().st_mtime_ns,
+    }
+    if (
+        handoff.get("weights_identity") != identity
+        or report.get("weights_identity") != identity
+    ):
+        raise ValueError("native checkpoint changed between save and load")
+    return report

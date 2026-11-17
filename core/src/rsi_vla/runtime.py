@@ -38,11 +38,20 @@ def resolve_reference(reference):
     return value
 
 
-def execution_binding(store, bundle, profile):
+def execution_binding(store, bundle, profile, *, normalization_path=None):
     """Capture the actual local inputs that a published evaluation must retain."""
     candidates = [value for value in store.all('candidates')
                   if value['bundle_id'] == bundle['bundle_id']]
-    return dict(
+    from copy import deepcopy
+    from .version_binding import bundle_references
+
+    normalization = {}
+    if normalization_path is not None and Path(normalization_path).is_file():
+        normalization = {"path": str(Path(normalization_path).resolve()),
+                         "content": json.loads(Path(normalization_path).read_text())}
+    return deepcopy(dict(
+        normalization=normalization,
+        version_references=bundle_references(bundle),
         bundle=bundle, profile=profile, candidates=candidates,
         references={key: resolve_reference(bundle[key])
                     for key in ('theta_ref', 'phi_ref')},
@@ -50,7 +59,7 @@ def execution_binding(store, bundle, profile):
                    if '#' in bundle['processor_ref'] else bundle['processor_ref']),
         records={key: store.get(kind, bundle[key]) for key, kind in
                  (('psi_ref', 'psi'), ('rho_ref', 'rho'), ('memory_ref', 'memory'))},
-    )
+    ))
 
 
 def prepare_runtime(root, artifacts, *, protocol_path, run_id, bundle_id, task_key,
@@ -232,8 +241,35 @@ def prepare_runtime(root, artifacts, *, protocol_path, run_id, bundle_id, task_k
                 context['collection'][key] = collection[key]
         command += ['--collect-flywheel-data', '--flywheel-root', str(output / relative)]
     context['task'] = {'suite': task['suite'], 'task': task['task_id'], 'seed': seed}
-    context['execution_binding'] = execution_binding(store, bundle, profile)
+    if task.get('materialization_ref'):
+        from robots.libero.materialized_task import runtime_binding
+        materialized = json.loads(Path(task['materialization_ref']).read_text())
+        binding = runtime_binding(materialized['task_ref'], seed=seed)
+        if materialized['task'] != task:
+            raise ValueError('protocol task differs from independent materialization')
+        context['task'] = binding['task_binding']
+        command += ['--materialized-task', materialized['task_ref']]
+
+    context['research_store_ref'] = str(store.root.resolve())
+    context['execution_binding'] = execution_binding(store, bundle, profile, normalization_path=normalization)
     context['code_ref'] = bundle['code_ref']
+    from copy import deepcopy
+    context['phi_ref'] = bundle['phi_ref']
+    context['rho_ref'] = bundle['rho_ref']
+    if 'skill_contracts' in profile:
+        context['skill_contracts'] = deepcopy(profile['skill_contracts'])
+    if 'l1_media_policy' in profile:
+        policy = deepcopy(profile['l1_media_policy'])
+        if policy.get('schema') != 'rsi-l1-media-policy-v1':
+            raise ValueError('unsupported L1 media policy')
+        if policy.get('rho_ref', bundle['rho_ref']) != bundle['rho_ref']:
+            raise ValueError('L1 media policy differs from the frozen rho reference')
+        policy['rho_ref'] = bundle['rho_ref']
+        maximum = policy.get('max_persisted_bytes', context['limits']['storage_bytes'])
+        if type(maximum) is not int or maximum < 0 or maximum > context['limits']['storage_bytes']:
+            raise ValueError('L1 media budget must stay within the runtime storage limit')
+        policy['max_persisted_bytes'] = maximum
+        context['l1_media_policy'] = policy
     if profile.get('relation_routes'):
         from .cooperation import prepare_skill_routes
         from .contracts import RunBundle
@@ -318,6 +354,8 @@ def prepare_runtime(root, artifacts, *, protocol_path, run_id, bundle_id, task_k
         command[command.index('--planner-timeout-s')+1] = str(int(context['limits']['planner_seconds']))
         command[command.index('--max-episode-steps')+1] = str(int(context['limits']['environment_steps']))
         context.update(dynamic_authorized=True, authorization_ref=str(Path(authorization_path).resolve()))
+        if authorization.get('request_scope') is not None:
+            context['request_scope'] = deepcopy(authorization['request_scope'])
     if profile['dynamic_authorized'] is not True or protocol.get('dynamic_authorized') is not True:
         blockers.append('authoritative profile/protocol dynamic authorization remains false')
     if profile['planner']['backend'] == 'codex' and profile.get('token_policy') != 'observed_only':
@@ -352,10 +390,24 @@ def prepare_runtime(root, artifacts, *, protocol_path, run_id, bundle_id, task_k
                                          historical_low_is_medium_baseline=False))
 
 
+def validate_runtime_binding(plan: dict) -> None:
+    """Recheck actual referenced inputs before any service or model is started."""
+    saved = plan['context']['execution_binding']
+    # The plan carries the authoritative store path; this is independent of cwd.
+    store = ResearchStore(plan['context']['research_store_ref'])
+    bundle = store.get('bundles', plan['context']['bundle_id'])
+    profile = resolve_reference(bundle['backend_ref'])
+    normalization_path = saved.get("normalization", {}).get("path")
+    current = execution_binding(store, bundle, profile, normalization_path=normalization_path)
+    if current != saved:
+        raise ValueError('runtime inputs changed after preparation; old job binding remains frozen')
+
+
 def execute_runtime(plan):
     if plan['blockers']:
         raise RuntimeError('; '.join(plan['blockers']))
     from .adapters.runtime_supervisor import supervise
+    validate_runtime_binding(plan)
     output = Path(plan['context']['output_dir'])
     with dynamic_job_lock():
         if plan['context'].get('release_binding'):

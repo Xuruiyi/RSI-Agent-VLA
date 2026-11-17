@@ -1,0 +1,57 @@
+flowchart TB
+    U["外部机器人任务 / 研究目标"]
+    CO["core Coordinator<br/>任务状态 · 后继流程 · 持久意图"]
+    AU["Autoloop<br/>事件 · 队列 · 唤醒"]
+    H["Host / Operator<br/>资源 · Permit · 作业监督"]
+
+    subgraph R["RPent：任务执行"]
+        RA["Runtime Agent<br/>Planner · Context"]
+        SK["Skills / ρB Router<br/>任务能力与交接"]
+        ROB["Robot Execution Service<br/>VLA · 动作监督 · 硬安全"]
+        RA --> SK --> ROB
+    end
+
+    E["受保护执行事实<br/>L0 · L1 · L2"]
+
+    subgraph C["core：研究与进化"]
+        O["Opportunity & Diagnosis<br/>研究机会与竞争解释"]
+        RE["Research Agent<br/>假设 · 实验设计 · 候选生成"]
+        CA["Candidate Archive<br/>分支 · 来源 · 成本"]
+        PSI["Meta-RSI<br/>ψ / ρC 研究策略"]
+        O --> RE --> CA
+        PSI --> RE
+        CA --> PSI
+    end
+
+    EXP["实验与训练后端<br/>仿真 · RLinf/OpenPI"]
+    EV["Independent Evaluator<br/>固定协议 · 安全 · 泛化"]
+    REL["Release Authority<br/>资格 · 激活 · 回滚"]
+    B["Active RunBundle<br/>版本快照"]
+
+    U --> CO
+    CO <-->|"唤醒与回执"| AU
+    AU --> H
+    CO <-->|"授权业务请求"| H
+    H --> RA
+    H --> EXP
+
+    ROB --> E
+    EXP --> E
+    E --> O
+    E --> EV
+    CO --> O
+
+    RE -->|"实验提案"| CO
+    CA -->|"评价申请"| EV
+    EV -->|"Gate 结果"| REL
+    REL -->|"原子版本交接"| B
+    B -.->|"新作业绑定"| CO
+
+    classDef agent fill:#e2efff,stroke:#4c82be,color:#14355c
+    classDef control fill:#fff1d6,stroke:#d29b37,color:#674200
+    classDef evidence fill:#e0f3e8,stroke:#40936c,color:#164d34
+    classDef gate fill:#f1e6fa,stroke:#9872b3,color:#51366c
+    class RA,RE,PSI agent
+    class CO,AU,H control
+    class E,O,CA,EXP evidence
+    class EV,REL,B gate

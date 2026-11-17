@@ -82,6 +82,12 @@ def evaluate_relation_consumption(store, output, *, research_request_ids=()):
                                     media_mode='text_only', image_bytes_sent=False)
         relations['rhoA'].update(value=True, source_refs=[str(ref) for ref in refs],
                                   measurement=selection_report)
+    if context.get('l1_media_policy') is not None:
+        persistence = review_media_persistence(root, context)
+        relations['rhoA']['persistence'] = persistence
+        if persistence['value'] is True:
+            relations['rhoA']['value'] = True
+            relations['rhoA']['source_refs'].extend(persistence['source_refs'])
     if relations['rhoA']['value'] is None:
         relations['rhoA']['missing'].append('No actual Research request/execution with candidate evidence selection')
     gate = context.get('relation_dispatch_admission')
@@ -141,3 +147,72 @@ def evaluate_relation_consumption(store, output, *, research_request_ids=()):
             raise ValueError(name+' consumer references missing evidence')
     return dict(schema='rsi-relation-consumption-v1', identity=identity, rho_ref=rho_ref,
                 relations=relations, role='evaluation', binding_alone_sufficient=False)
+
+
+def review_media_persistence(output, context=None):
+    """Read the actual L1 outlet receipts independently of reference selection."""
+    from .process_accounting import accounted_storage_bytes, snapshot
+
+    root = Path(output).resolve()
+    context = context or json.loads((root / "runtime_context.json").read_text())
+    config = context["l1_media_policy"]
+    binding = context["execution_binding"]
+    rho_ref = binding["bundle"]["rho_ref"]
+    if config.get("rho_ref") != rho_ref:
+        raise ValueError("L1 outlet receipt policy binding mismatch")
+    reference = root / "action_events.jsonl"
+    rows = [json.loads(line) for line in reference.read_text().splitlines()]
+    identity = {key: context[key] for key in ("run_id", "episode_id", "bundle_id", "protocol_id")}
+    if any(any(row.get(key) != value for key, value in identity.items()) for row in rows):
+        raise ValueError("L1 outlet receipt identity mismatch")
+    selections = [row for row in rows if row["kind"] == "media_retention_selection"]
+    admissions = [row for row in rows if row["kind"] == "media_persistence_admission"]
+    written = [row for row in rows if row["kind"] == "media_materialized"]
+    optional = set(config["optional_artifacts"]) - set(config.get("protected_artifacts", []))
+    protected_run = not (context.get("information_scope") == "development"
+        and context.get("execution_arm", {}).get("arm") in {"D", "S", "R"}
+        and context.get("planner", {}).get("backend") == "flash" and not context.get("relation_control"))
+    policy = binding["records"]["rho_ref"]["rhoA"]
+    chosen = select_media(policy, [{"media": sorted(optional)}])
+    states_path = root / "states.json"
+    states = json.loads(states_path.read_text()).get("steps", []) if states_path.exists() else []
+    protected_steps = set(config.get("protected_steps", [])) | {
+        state["step_idx"] for state in states if state.get("terminated") or state.get("truncated")
+        or state.get("extras", {}).get("audit_required")}
+    missing = []
+    for row in selections:
+        protected = protected_run or row["artifact"] not in optional or row["step"] in protected_steps
+        expected = protected or row["artifact"] in chosen
+        if (row.get("rho_ref") != rho_ref or row.get("protected") != protected
+                or row.get("selected") != expected or row.get("probability") != float(expected)):
+            raise ValueError("actual L1 outlet differs from its bound rhoA or protected control evidence")
+    for row in admissions:
+        if (row.get("rho_ref") != rho_ref
+                or row.get("max_persisted_bytes") != config["max_persisted_bytes"]
+                or row.get("encoded_bytes", -1) < 0):
+            raise ValueError("L1 byte admission receipt differs from frozen budget")
+    for row in written:
+        name = row["artifact"]
+        step = row["step"]
+        expected_path = root / name if step is None else root / name / f"{step:02d}{Path(name).suffix}"
+        if Path(name).name != name or Path(row["path"]) != expected_path or row.get("rho_ref") != rho_ref:
+            raise ValueError("L1 materialization receipt escaped its owned outlet")
+        if not expected_path.is_file() or expected_path.stat().st_size != row["persisted_bytes"]:
+            missing.append(str(expected_path))
+    for row in selections:
+        if row["selected"] and not any((item["artifact"], item["step"]) == (row["artifact"], row["step"])
+                for item in written) and not any((item["artifact"], item["step"]) == (row["artifact"], row["step"])
+                and item.get("admitted") is False for item in admissions):
+            missing.append("materialization_or_budget_receipt:" + row["artifact"] + ":" + str(row["step"]))
+    if not selections:
+        missing.append("actual_L1_outlet_selection")
+    return {"schema": "rsi-l1-persistence-consumption-v1",
+        "value": True if selections and (written or admissions) and not missing else None,
+        "rho_ref": rho_ref, "identity": identity,
+        "selection_target": "actual_media_persistence", "selections": selections,
+        "byte_admissions": admissions, "materializations": written,
+        "persistent_output_bytes": sum(snapshot([root]).values()),
+        "cumulative_new_bytes_lower_bound": accounted_storage_bytes(root),
+        "exact_cumulative_bytes": None, "diagnostic_quality": None,
+        "missing": missing, "source_refs": [str(reference), str(root / "runtime_context.json")],
+        "deletion_refunds_cumulative_cost": False}

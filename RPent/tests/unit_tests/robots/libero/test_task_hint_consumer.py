@@ -74,7 +74,9 @@ def test_v5_accepts_1200_characters_without_rewriting(tmp_path):
     assert journal(tmp_path, rules("任" * 1200)).planner_task_hint == "任" * 1200
 
 
-@pytest.mark.parametrize("change", ["missing_hint", "missing_v4_field", "unexpected_field", "old_schema"])
+@pytest.mark.parametrize(
+    "change", ["missing_hint", "missing_v4_field", "unexpected_field", "old_schema"]
+)
 def test_v5_requires_exact_schema_fields(tmp_path, change):
     value = rules("Inspect the target label.")
     if change == "missing_hint":
@@ -89,7 +91,13 @@ def test_v5_requires_exact_schema_fields(tmp_path, change):
         journal(tmp_path, value)
 
 
-@pytest.mark.parametrize("value", [None, {"schema": "rsi-runtime-rules-v1", "chunk_steps": 5, "baseline_chunk_steps": 5}])
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        {"schema": "rsi-runtime-rules-v1", "chunk_steps": 5, "baseline_chunk_steps": 5},
+    ],
+)
 def test_old_rules_keep_empty_task_hint(tmp_path, value):
     runtime = journal(tmp_path, value)
     start = json.loads(runtime.events_path.read_text().splitlines()[0])
@@ -97,7 +105,9 @@ def test_old_rules_keep_empty_task_hint(tmp_path, value):
     assert start["effective_rules"]["planner_task_hint"] == ""
 
 
-@pytest.mark.parametrize("version", ["libero-startup-v1", "libero-startup-v2-bounded-vla"])
+@pytest.mark.parametrize(
+    "version", ["libero-startup-v1", "libero-startup-v2-bounded-vla"]
+)
 def test_task_hint_appends_only_to_planner_user_input(tmp_path, version):
     memory = tmp_path / "revision" / "version"
     memory.mkdir(parents=True)
@@ -106,20 +116,37 @@ def test_task_hint_appends_only_to_planner_user_input(tmp_path, version):
         path.parent.mkdir(exist_ok=True)
         path.write_text("\n".join(V2_EXCERPTS[relative]))
     profile = tmp_path / "profile.json"
-    profile.write_text(json.dumps({"memory": {"revision": "revision", "version": "version"}}))
+    profile.write_text(
+        json.dumps({"memory": {"revision": "revision", "version": "version"}})
+    )
     context = {
-        "run_id": "r", "episode_id": "e", "bundle_id": "b", "protocol_id": "p",
+        "run_id": "r",
+        "episode_id": "e",
+        "bundle_id": "b",
+        "protocol_id": "p",
         "profile_ref": str(profile),
         "task": {"suite": "libero_object_swap", "task": 2, "seed": 2},
-        "task_input": {"version": version, "task_language": "Pick the salad dressing and place it in the basket"},
+        "task_input": {
+            "version": version,
+            "task_language": "Pick the salad dressing and place it in the basket",
+        },
     }
     original = build_task_input(context, memory, context["task"])
-    assert build_task_input({**context, "planner_task_hint": ""}, memory, context["task"]) == original
-    hint = "Select the salad dressing by its current visible label; use the latest images."
-    view = build_task_input({**context, "planner_task_hint": hint}, memory, context["task"])
+    assert (
+        build_task_input({**context, "planner_task_hint": ""}, memory, context["task"])
+        == original
+    )
+    hint = (
+        "Select the salad dressing by its current visible label; use the latest images."
+    )
+    view = build_task_input(
+        {**context, "planner_task_hint": hint}, memory, context["task"]
+    )
     assert view == {
         **original,
-        "user_message": original["user_message"] + "\n\nAdditional Planner instruction from the runtime rule:\n" + hint,
+        "user_message": original["user_message"]
+        + "\n\nAdditional Planner instruction from the runtime rule:\n"
+        + hint,
     }
     assert "Success requires native terminated=true." in view["system_prompt"]
     assert "no reset" in view["system_prompt"].lower()

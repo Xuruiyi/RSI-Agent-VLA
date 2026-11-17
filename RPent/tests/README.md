@@ -248,3 +248,9 @@ Offline regression tests remain in `unit_tests/robots/dual_franka/`.
 See the deployment prerequisites in the
 [English](../docs/source-en/rst_source/real_world_robots/dual_franka.rst) or
 [Chinese](../docs/source-zh/rst_source/real_world_robots/dual_franka.rst) guide.
+
+## RSI 框架离线接线
+
+从聚合仓库根使用现有 RPent 环境，`PYTHONPATH=core/src:core/tests:RPent`，运行 core 的 `test_inherited_rule_host`、`test_f10_f11_host`、`test_goal_host` 、`test_meta_exam_host` 和 `test_release_host`。真实角色组合需要宿主允许 loopback socket、Unix socket 与 bwrap/user namespace；`/tmp` 源副本可能被角色 scratch 挂载遮蔽，应从实际源码树运行。原生重组件只在外部边界替换，fixture 使用隔离合成域，不能写正式产物或启动历史队列。
+
+RPent 的 `test_materialized_task.py` 检查任务身份、CLI、Env daemon 参数与 RLinf 文件选择薄适配，复用 `test_env_selection.py` 的原任务选择回归。它们不初始化仿真环境。core 的精确命令、版本、费用与验证边界统一记录在[OFFLINE_CHECKS](../../core/OFFLINE_CHECKS.md)，本批授权和状态在[项目文档04](../../项目文档/04_实施路线与执行状态.md)。

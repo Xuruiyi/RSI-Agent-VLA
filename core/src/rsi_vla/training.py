@@ -1,17 +1,17 @@
 """Bounded supervision for an explicitly authorized native training process."""
-from contextlib import contextmanager
-from dataclasses import dataclass, asdict
 import fcntl
 import json
 import math
 import os
-from pathlib import Path
 import signal
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-
+from pathlib import Path
+from typing import Any
 
 DYNAMIC_LOCK = "/tmp/rsi-agent-vla-dynamic.lock"
 JOB_MARKER = "RSI_TRAINING_JOB_ROOT"
@@ -335,3 +335,307 @@ def supervise_process(command, *, budget, artifact_root, env=None, poll_seconds=
     if raised is not None:
         raise raised
     return report
+
+
+def training_handoff(
+    result_ref: str | Path, *, scope_id: str | None = None, require_load: bool = False
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read a successful native receipt and revalidate its concrete model outputs."""
+    from .adapters.pi05_training import inspect_checkpoint
+
+    if not result_ref:
+        raise PermissionError("actual completed native receipt reference is required")
+    path = Path(result_ref).resolve()
+    result = json.loads(path.read_text())
+    if (
+        result.get("schema") != "rsi-native-training-job-result-v1"
+        or result.get("status") != "completed"
+        or not result.get("handoff_ref")
+        or (scope_id is not None and result.get("scope_id") != scope_id)
+        or (require_load and result.get("kind") != "pi05-load-check")
+    ):
+        raise PermissionError("completed native training/load receipt is required")
+    report = json.loads(Path(result["supervision_ref"]).read_text())
+    if (
+        report.get("returncode") != 0
+        or report.get("stop_reason") is not None
+        or report.get("cleanup_confirmed") is not True
+        or report.get("resource_limits_satisfied") is not True
+    ):
+        raise PermissionError("native receipt process closure is invalid")
+    handoff = json.loads(Path(result["handoff_ref"]).read_text())
+    if (
+        handoff.get("scope_id") != result["scope_id"]
+        or handoff.get("run_id") != result["run_id"]
+    ):
+        raise PermissionError("native handoff scope/run mismatch")
+    descriptor = handoff["model_descriptor"]
+    if (
+        result.get("theta_ref")
+        != str(Path(result["handoff_ref"]).resolve()) + "#/model_descriptor"
+        or result.get("processor_ref") != descriptor["norm_stats_path"]
+    ):
+        raise PermissionError(
+            "native theta/processor export does not match its handoff"
+        )
+    layout = inspect_checkpoint(descriptor["model_path"], descriptor["norm_stats_path"])
+    weights = Path(layout["selected_weights"])
+    identity = {
+        "path": str(weights.resolve()),
+        "bytes": weights.stat().st_size,
+        "mtime_ns": weights.stat().st_mtime_ns,
+    }
+    if (
+        handoff.get("weights_identity") != identity
+        or handoff.get("processor_snapshot")
+        != json.loads(Path(layout["norm_stats"]).read_text())
+        or result.get("model_path") != descriptor["model_path"]
+        or result.get("norm_stats_path") != descriptor["norm_stats_path"]
+    ):
+        raise PermissionError("native saved model or processor identity changed")
+    if require_load:
+        from .adapters.pi05_training import verify_native_load_receipt
+
+        if descriptor.get("actual_load_verified") is not True:
+            raise PermissionError("actual RPent model load has not been verified")
+        verify_native_load_receipt(
+            json.loads(Path(result["load_check_ref"]).read_text()), handoff
+        )
+    return result, handoff
+
+
+def finalize_training_job(
+    *,
+    prepared_root: str | Path,
+    artifact_root: str | Path,
+    permit: dict[str, Any],
+    supervision: dict[str, Any],
+    python_executable: str,
+    training_result_ref: str | Path | None = None,
+) -> dict[str, Any]:
+    """Close a native job even when its save/load output is missing or incomplete."""
+    from .adapters.pi05_training import (
+        resolve_native_training_output,
+        verify_native_load_receipt,
+    )
+    from .storage import atomic_json
+
+    root, artifact = Path(prepared_root).resolve(), Path(artifact_root).resolve()
+    result = {
+        "schema": "rsi-native-training-job-result-v1",
+        "scope_id": permit["scope_id"],
+        "operation_id": permit["operation_id"],
+        "run_id": permit["run_id"],
+        "kind": permit["kind"],
+        "status": "failed",
+        "handoff_ref": None,
+        "supervision_ref": str(artifact / "supervision.json"),
+        "native_start_ref": str(artifact / "native-start.json"),
+        "capability_evaluation": "not_run",
+        "errors": [],
+        "result_ref": str(artifact / "job-result.json"),
+        "artifact_ref": str(artifact / "job-result.json"),
+    }
+    try:
+        persisted = json.loads((artifact / "supervision.json").read_text())
+        if persisted != supervision:
+            raise PermissionError(
+                "native supervision differs from its persisted original"
+            )
+        recipe = json.loads((root / "recipe.json").read_text())
+        if recipe["runner"]["logger"]["experiment_name"] != permit["run_id"]:
+            raise PermissionError("native parser recipe/permit run mismatch")
+        expected_root = root / (
+            permit["run_id"] + "-load-check"
+            if permit["kind"] == "pi05-load-check"
+            else permit["run_id"]
+        )
+        if artifact != expected_root:
+            raise PermissionError(
+                "native parser artifact path differs from its registered run"
+            )
+        start = json.loads((artifact / "native-start.json").read_text())
+        entry = (
+            "native_verify_load"
+            if permit["kind"] == "pi05-load-check"
+            else "native_train"
+        )
+        if (
+            start.get("schema") != "rsi-native-training-start-v1"
+            or start.get("entrypoint") != entry
+            or any(
+                start.get(key) != permit[key]
+                for key in ("scope_id", "operation_id", "run_id", "kind")
+            )
+        ):
+            raise PermissionError(
+                "native parser start identity differs from its exact operation"
+            )
+        if (
+            supervision.get("returncode") != 0
+            or supervision.get("stop_reason") is not None
+            or supervision.get("cleanup_confirmed") is not True
+            or supervision.get("resource_limits_satisfied") is not True
+        ):
+            raise ValueError(
+                "native job failed or exceeded its resource/cleanup limits"
+            )
+        if permit["kind"] == "pi05-load-check":
+            if not training_result_ref:
+                raise PermissionError(
+                    "load check must consume the actual completed training result"
+                )
+            trained, handoff = training_handoff(
+                training_result_ref, scope_id=permit["scope_id"]
+            )
+            if trained["run_id"] != permit["run_id"]:
+                raise PermissionError(
+                    "load check belongs to another native training run"
+                )
+            verified = json.loads((artifact / "load-check.json").read_text())
+            verify_native_load_receipt(verified, handoff)
+            handoff["actual_model_load"] = "passed"
+            handoff["model_descriptor"].update(
+                actual_load_verified=True,
+                actual_load_evidence_ref=str(artifact / "load-check.json"),
+            )
+            handoff_ref = artifact / "deployment-handoff-verified.json"
+            result.update(
+                load_check_ref=str(artifact / "load-check.json"),
+                training_result_ref=str(Path(training_result_ref).resolve()),
+            )
+        else:
+            handoff = resolve_native_training_output(
+                prepared_root=root,
+                artifact_root=artifact,
+                permit=permit,
+                supervision=supervision,
+                python_executable=python_executable,
+            )
+            handoff_ref = artifact / "deployment-handoff.json"
+        atomic_json(handoff_ref, handoff)
+        descriptor = handoff["model_descriptor"]
+        result.update(
+            status="completed",
+            handoff_ref=str(handoff_ref),
+            model_path=descriptor["model_path"],
+            norm_stats_path=descriptor["norm_stats_path"],
+            theta_ref=str(handoff_ref) + "#/model_descriptor",
+            processor_ref=descriptor["norm_stats_path"],
+            recipe_ref=str(root / "recipe.json"),
+        )
+    except (OSError, ValueError, KeyError, TypeError, PermissionError) as exc:
+        result["errors"] = [str(exc)]
+    atomic_json(artifact / "job-result.json", result)
+    return result
+
+
+def finalize_native_model_meter(
+    *,
+    artifact_root: str | Path,
+    permit: dict[str, Any],
+    supervision: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Close project-request accounting for the two fixed local native entries.
+
+    Native SFT and the local RPent facade use no Planner/Research client or
+    project LLM transport. Their start marker, supervised command and completed
+    output must establish that exact boundary before its zero count is usable.
+    """
+    from .storage import atomic_json
+
+    root = Path(artifact_root).resolve()
+    meter = {
+        "schema": "rsi-native-training-model-meter-v1",
+        "scope_id": permit["scope_id"],
+        "operation_id": permit["operation_id"],
+        "owner_uid": os.geteuid(),
+        "status": "unknown",
+        "project_model_requests": None,
+        "model_clients_created": None,
+        "model_transports_created": None,
+        "components": [],
+        "native_start_ref": str(root / "native-start.json"),
+        "supervision_ref": str(root / "supervision.json"),
+        "result_ref": str(root / "job-result.json"),
+        "count_scope": "project Planner/Research LLM requests and transports; local native policy and Ray collectives are separate components",
+        "errors": [],
+    }
+    try:
+        start = json.loads((root / "native-start.json").read_text())
+        saved_supervision = json.loads((root / "supervision.json").read_text())
+        saved_result = json.loads((root / "job-result.json").read_text())
+        entrypoint = start.get("entrypoint")
+        component = {
+            "native_train": "native_sft",
+            "native_verify_load": "native_loader_one_prediction",
+        }.get(entrypoint)
+        family = (
+            "pi05-load-check" if entrypoint == "native_verify_load" else permit["kind"]
+        )
+        if (
+            component is None
+            or family
+            not in {"pi05-training-pilot", "pi05-training-learning", "pi05-load-check"}
+            or permit["kind"] != family
+            or (entrypoint == "native_train" and family == "pi05-load-check")
+            or start.get("schema") != "rsi-native-training-start-v1"
+            or start.get("boundary")
+            != "native_adapter_process_entry_before_optional_imports"
+            or start.get("owner_uid") != os.geteuid()
+            or permit.get("owner_uid") != os.geteuid()
+            or any(
+                start.get(key) != permit[key]
+                for key in ("scope_id", "operation_id", "run_id", "kind")
+            )
+        ):
+            raise PermissionError("native project-request boundary identity mismatch")
+        command = supervision.get("command", [])
+        suffix = (
+            "native_verify_load(*sys.argv[1:])"
+            if entrypoint == "native_verify_load"
+            else "native_train(sys.argv[1])"
+        )
+        expected_code = (
+            "from rsi_vla.adapters.pi05_training import "
+            + entrypoint
+            + "; import sys; "
+            + suffix
+        )
+        owned_pids = {row["pid"] for row in supervision.get("owned_pid_identities", [])}
+        if (
+            len(command) < 4
+            or command[1:3] != ["-c", expected_code]
+            or Path(command[3]).resolve() != root.parent / "recipe.json"
+            or start.get("pid") not in owned_pids
+            or saved_supervision != supervision
+            or saved_result != result
+            or supervision.get("returncode") != 0
+            or supervision.get("stop_reason") is not None
+            or supervision.get("resource_limits_satisfied") is not True
+            or supervision.get("cleanup_confirmed") is not True
+            or supervision.get("remaining_owned_pids") != []
+            or result.get("schema") != "rsi-native-training-job-result-v1"
+            or result.get("status") != "completed"
+            or any(
+                result.get(key) != permit[key]
+                for key in ("scope_id", "operation_id", "run_id", "kind")
+            )
+        ):
+            raise PermissionError(
+                "fixed native command or completed cleanup evidence missing"
+            )
+        meter.update(
+            status="closed",
+            project_model_requests=0,
+            model_clients_created=[],
+            model_transports_created=[],
+            components=[component],
+            observed_entrypoint=entrypoint,
+            boundary_evidence="fixed local native entrypoint; no project LLM client or transport factory; exact owned PID and completed supervised native output",
+        )
+    except (OSError, ValueError, KeyError, TypeError, PermissionError) as exc:
+        meter["errors"] = [str(exc)]
+    atomic_json(root / "model-meter.json", meter)
+    return meter

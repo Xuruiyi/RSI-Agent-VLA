@@ -210,7 +210,7 @@ class MidtermLedger:
             raise PermissionError("scope owner or write domain mismatch")
         if active and (
             scope.get("status") != "active"
-            or scope.get("dynamic_authorized") is not True
+            or not (scope.get("dynamic_authorized") is True or scope.get("cpu_authorized") is True)
             or utcnow() >= timestamp(scope["expires_at"])
         ):
             raise PermissionError("task paused, closed or expired")
@@ -231,6 +231,42 @@ class MidtermLedger:
     def read(self):
         with self.lock():
             return self._read()
+
+    @staticmethod
+    def blocking_unresolved_costs(scope, state, *, for_model_operation=None):
+        """Retain debt, allowing only one explicitly authorized prior token unknown."""
+        allowance = scope.get("one_off_token_unknown_recovery", {})
+        enabled = (
+            allowance.get("authorized") is True
+            and allowance.get("old_token_values_stay_unknown") is True
+            and allowance.get("failed_request_count_not_refunded") is True
+            and scope.get("token_policy", {}).get("mode") == "observed_cumulative_stop_threshold"
+            and state.get("scope_id") == scope.get("scope_id")
+            and (for_model_operation is None
+                 or for_model_operation == allowance.get("recovery_operation_id"))
+        )
+        blocking = []
+        for item in state.get("unresolved_costs", []):
+            record = state.get("reservations", {}).get(item.get("operation_id"), {})
+            missing = set(item.get("missing", []))
+            actual = record.get("actual", {})
+            hard = set(record.get("budget", {})) - {"input_tokens", "output_tokens"}
+            known = {"model_requests", "runtime_starts", "wall_seconds", "gpu_seconds", "storage_bytes"}
+            retained_prior_token_debt = (
+                enabled and item.get("operation_id") == allowance.get("original_operation_id")
+                and record.get("scope_id") == scope.get("scope_id")
+                and item.get("cleanup_confirmed") is True and record.get("cleanup_confirmed") is True
+                and record.get("status") == "unknown" and missing
+                and missing <= {"input_tokens", "output_tokens"}
+                and set(record.get("missing", [])) == missing
+                and hard <= actual.keys() and known <= actual.keys()
+                and actual.get("model_requests") == 1 and actual.get("runtime_starts") == 1
+                and all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+                        for key, value in actual.items() if key in hard)
+            )
+            if not retained_prior_token_debt:
+                blocking.append(deepcopy(item))
+        return blocking
 
     @staticmethod
     def _held(record, dimension):
@@ -254,11 +290,14 @@ class MidtermLedger:
     @staticmethod
     def _phase(record, budget):
         phase = read(record["phase_ref"])
+        reserve = numbers(record.get("mandatory_reserve", {}))
+        needed = {key: budget.get(key, 0) + reserve.get(key, 0)
+                  for key in budget.keys() | reserve.keys()}
         if (
             phase.get("unresolved_costs") and not record.get("evidence_closure")
         ) or any(
             value > phase["remaining"].get(key, -1)
-            for key, value in budget.items()
+            for key, value in needed.items()
             if key in phase["limits"]
         ):
             raise PermissionError(
@@ -274,6 +313,7 @@ class MidtermLedger:
         gpu_devices,
         receipt_ref,
         evidence_closure=False,
+        mandatory_reserve=None,
     ):
         """Persist one reservation before starting its independent supervisor."""
         identifier(operation_id)
@@ -301,6 +341,14 @@ class MidtermLedger:
                 "gpu_devices": gpu_devices,
                 "receipt_ref": str(receipt_ref),
             }
+            scope_reserve = numbers(scope.get("mandatory_reserve", {}))
+            operation_reserve = numbers(mandatory_reserve or {})
+            reserve = {key: max(scope_reserve.get(key, 0), operation_reserve.get(key, 0))
+                       for key in scope_reserve.keys() | operation_reserve.keys()}
+            if reserve:
+                if set(reserve) - (state["limits"].keys() - CAPACITIES):
+                    raise ValueError("unregistered mandatory reserve dimension")
+                record["mandatory_reserve"] = reserve
             if evidence_closure:
                 if gpu_devices or set(budget) - {"storage_bytes", "current_disk_bytes"}:
                     raise PermissionError(
@@ -316,11 +364,25 @@ class MidtermLedger:
                 ):
                     raise ValueError("conflicting operation reservation")
                 return deepcopy(old)
-            if state.get("unresolved_costs") and not evidence_closure:
+            if self.blocking_unresolved_costs(
+                scope, state, for_model_operation=operation_id if budget.get("model_requests", 0) > 0 else None
+            ) and not evidence_closure:
                 raise PermissionError("unresolved task costs require reconciliation")
             if set(budget) - (state["limits"].keys() - CAPACITIES):
                 raise ValueError("unregistered hard resource dimension")
-            for dimension, amount in budget.items():
+            observed_tokens = scope.get("token_policy", {}).get("mode") == "observed_cumulative_stop_threshold"
+            if observed_tokens:
+                if any(budget.get(name, 0) != 0 for name in ("input_tokens", "output_tokens")):
+                    raise PermissionError("observed token policy does not reserve estimated tokens")
+                if budget.get("model_requests", 0) > 0 and any(
+                    state["used"].get(name, 0) >= state["limits"][name]
+                    for name in ("input_tokens", "output_tokens")
+                ):
+                    raise PermissionError("scope observed token stop threshold reached")
+            for dimension in budget.keys() | reserve.keys():
+                if observed_tokens and dimension in {"input_tokens", "output_tokens"}:
+                    continue
+                amount = budget.get(dimension, 0)
                 held = sum(
                     self._held(item, dimension)
                     for item in state["reservations"].values()
@@ -328,7 +390,7 @@ class MidtermLedger:
                 if dimension == 'storage_bytes':
                     held += sum(row['upper_bound_bytes'] for row in state.get('historical_control_uncertainties', []))
                 if (
-                    state["used"].get(dimension, 0) + held + amount
+                    state["used"].get(dimension, 0) + held + amount + reserve.get(dimension, 0)
                     > state["limits"][dimension]
                 ):
                     raise PermissionError("outer task budget exhausted: " + dimension)
@@ -551,7 +613,33 @@ def build_configuration(
             "gpu_devices": [],
             "supervisor_limits": {"wall_seconds": 180, "storage_bytes": 64 * 1024**2},
         }
-        if kind == "runtime":
+        if kind == "host_command" and operation.get("cpu_purpose"):
+            from .cpu_command import PURPOSES
+            purpose = operation["cpu_purpose"]
+            if purpose not in PURPOSES or not operation.get("version"):
+                raise ValueError("CPU operation requires a registered purpose and version")
+            role = {"analysis": "operator", "baseline_freeze": "operator",
+                    "data_review": "evaluation", "result_import": "evaluation",
+                    "scientific_evaluation": "evaluation", "qualification": "release",
+                    "successor_prepare": "runtime"}[purpose]
+            domain = {"operator": "operator", "evaluation": "state/evaluation",
+                      "release": "release", "runtime": "runtime"}[role]
+            output = root / domain / "cpu_operations" / identifier(operation["operation_id"])
+            template.update(
+                command=[python or sys.executable, str(Path(core["repository_root"]) / "scripts/run_cpu_operation.py")],
+                result_ref=str(output / "result.json"),
+                permit_ref=str(root / "operator/cpu_permits" / (operation["operation_id"] + ".json")),
+                permit_template={"kind": "generic-cpu-model0"},
+                cpu_purpose=purpose, cpu_role=role, version=operation["version"],
+                storage_write_roots=[str(output)],
+                exports=deepcopy(operation.get("exports", {})),
+                late_refs=deepcopy(operation.get("late_refs", {})),
+            )
+            template["budget"].update({key: 0 for key in ("model_requests", "gpu_seconds")
+                                       if key in scope["outer_limits"]})
+            if "wall_seconds" in scope["outer_limits"]:
+                template["budget"]["wall_seconds"] = template["supervisor_limits"]["wall_seconds"]
+        elif kind == "runtime":
             slot = next(
                 row
                 for row in core["runtime_slots"]
@@ -605,10 +693,30 @@ def build_configuration(
                     key: limits[key] for key in ("wall_seconds", "storage_bytes")
                 },
             )
+        if (kind in {"runtime", "research"} and operation["dynamic"]
+                and scope.get("token_policy", {}).get("mode") == "observed_cumulative_stop_threshold"):
+            template["budget"].update(input_tokens=0, output_tokens=0)
+        if "command" not in template:
+            template.update(exports=deepcopy(operation.get("exports", {})),
+                            late_refs=deepcopy(operation.get("late_refs", {})),
+                            storage_write_roots=deepcopy(operation.get("storage_write_roots", [])))
         if core.get('research_request_envelope') == 'complete_v2' and operation.get('payload', {}).get('request_id'):
             cap = protocol['task_policy']['research_per_request']
             template['budget'].update(storage_bytes=cap['storage_bytes'], current_disk_bytes=cap['storage_bytes'])
             template['supervisor_limits'].update(wall_seconds=cap['wall_seconds'], storage_bytes=cap['storage_bytes'])
+        if (not operation["dynamic"] and "command" not in template
+                and scope.get("cpu_authorized") is True
+                and operation["operation_id"] in scope.get("cpu_operation_ids", [])):
+            output = root / "operator/role_cpu_permits" / identifier(operation["operation_id"])
+            template.update(
+                permit_ref=str(output / "permit.json"),
+                result_ref=str(output / "unused-result.json"),
+                permit_template={"kind": "generic-cpu-model0"},
+                cpu_purpose="analysis", version=operation.get("version", core["base_bundle_id"]),
+            )
+            template["budget"].update(model_requests=0, gpu_seconds=0)
+            if "wall_seconds" in scope["outer_limits"]:
+                template["budget"]["wall_seconds"] = template["supervisor_limits"]["wall_seconds"]
         operations[operation["operation_id"]] = template
     return {
         "schema": "rsi-midterm-host-v1",
@@ -724,34 +832,66 @@ class MidtermHost:
         from .protocol10_roles import run_role
         from .protocol10_roles import ROLES
 
-        template = self.config["operations"][operation["operation_id"]]
-        if "command" in template:
+        from .host_inputs import consumer_inputs
+        from .cpu_command import is_cpu
+        resolved, template = consumer_inputs(self, operation)
+        if operation["kind"] == "p1_boundary_check":
+            from .cpu_command import permit, result
+            from .p1_acceptance import capture_boundaries
             if action != "execute":
-                if template.get('permit_ref'):
-                    from .fixed_command import fixed_result
-                    return fixed_result(self,operation,template)
-                raise RuntimeError(
-                    "registered command submission is unknown; inspect its original receipt"
-                )
-            returned = subprocess.run(
-                template["command"], cwd=self.config["repository_root"], check=False
-            )
-            if returned.returncode and not Path(template["result_ref"]).exists():
-                raise RuntimeError(
-                    "registered command failed: " + str(returned.returncode)
-                )
-            if template.get('permit_ref'):
+                return result(self, operation, template)
+            permit(self, operation, template, consuming=True)
+            result_ref = Path(template["result_ref"])
+            boundary_ref = result_ref.with_name("boundaries.json")
+            capture_boundaries(self.config["continuation_configuration_ref"], boundary_ref)
+            grant = read(template["permit_ref"])
+            atomic_json(result_ref, {
+                "schema": "rsi-cpu-operation-result-v1", "scope_id": grant["scope_id"],
+                "operation_id": operation["operation_id"], "version": template["version"],
+                "status": "completed", "artifact_ref": str(boundary_ref),
+                "value": {"artifact_ref": str(boundary_ref)},
+            })
+            return result(self, operation, template)
+        if "command" in template:
+            if not template.get("permit_ref"):
+                raise PermissionError("registered command requires an actual operation permit")
+            if is_cpu(template):
+                from .cpu_command import permit, result
+                if action != "execute":
+                    return result(self, operation, template)
+                permit(self, operation, template, consuming=True)
+                from .protocol10_roles import _sandbox_command, role_isolation
+                role = template.get("cpu_role", "operator")
+                if role not in {"operator", "evaluation", "release", "runtime"}:
+                    raise PermissionError("CPU command requires a networkless trusted role")
+                root = Path(self.core_config["isolation_task_root"])
+                for relative in ROLES.values():
+                    (root / relative).mkdir(parents=True, exist_ok=True)
+                if role in {"runtime", "release"}:
+                    Path("/tmp/rsi-agent-vla-dynamic.lock").touch(exist_ok=True)
+                command = _sandbox_command(root, role, template["command"],
+                    **role_isolation(self.core_config, role))
+                # Inputs are a fixed data file, never additional argv authority.
+                index = command.index("--")
+                command[index:index] = ["--unshare-net", "--setenv", "RSI_OPERATION_INPUT_REF",
+                    str(self.root / "jobs" / operation["operation_id"] / "public-inputs.json"),
+                    "--setenv", "RSI_CPU_PERMIT_REF", template["permit_ref"]]
+                returned = subprocess.run(command, cwd=self.config["repository_root"], check=False)
+                if returned.returncode:
+                    raise RuntimeError("registered CPU command failed: " + str(returned.returncode))
+                return result(self, operation, template)
+            if action != "execute":
                 from .fixed_command import fixed_result
-                return fixed_result(self,operation,template)
-            receipt = read(template["result_ref"])
-            if receipt.get("operation_id") != operation["operation_id"]:
-                raise ValueError("registered command result identity mismatch")
-            if (
-                receipt.get("scope_id", self.config["scope_id"])
-                != self.config["scope_id"]
-            ):
-                raise ValueError("registered command result scope mismatch")
-            return receipt
+                return fixed_result(self, operation, template)
+            # The native consumer rechecks its family permit and reservation.
+            returned = subprocess.run(template["command"], cwd=self.config["repository_root"], check=False)
+            if returned.returncode and not Path(template["result_ref"]).exists():
+                raise RuntimeError("registered command failed: " + str(returned.returncode))
+            from .fixed_command import fixed_result
+            return fixed_result(self, operation, template)
+        if is_cpu(template):
+            from .cpu_command import permit
+            permit(self, operation, template, consuming=True)
         for role, relative in ROLES.items():
             (Path(self.core_config["isolation_task_root"]) / relative).mkdir(
                 parents=True, exist_ok=True
@@ -767,7 +907,10 @@ class MidtermHost:
             "operation": operation,
             "inputs": inputs,
         }
-        returned = run_role(self.core_config, task)
+        # Validate the original registered public configuration first. The role
+        # receives only the separately checked, immutable receipt data afterwards.
+        returned = run_role(self.core_config, task, resolved_operation=resolved,
+                            boundary_factory=self.core_config.get("offline_boundary_factory"))
         if returned.get("error"):
             raise RuntimeError(returned["error"])
         for proposal in returned.get("phase_proposals", []):
@@ -776,13 +919,25 @@ class MidtermHost:
 
     def materialize(self, operation):
         """Create only the current operation's exact permit and Research context."""
+        from .host_inputs import materialize_inputs, consumer_inputs
+        from .cpu_command import is_cpu
+        materialize_inputs(self, operation)
+        resolved, template = consumer_inputs(self, operation)
         kind = operation["kind"]
-        template = self.config["operations"][operation["operation_id"]]
         if "command" in template:
+            if is_cpu(template):
+                from .cpu_command import permit
+                permit(self, operation, template)
+                return
+            if not template.get("permit_ref"):
+                raise PermissionError("registered command requires an actual operation permit")
             from .fixed_command import fixed_permit, fixed_storage_context
             fixed_storage_context(self, operation, template)
             fixed_permit(self, operation, template)
             return
+        if is_cpu(template):
+            from .cpu_command import permit
+            permit(self, operation, template)
         from .research_supervision import lifecycle
         request_envelope = lifecycle(self,operation)
         if kind == "research_prepare":
@@ -791,7 +946,10 @@ class MidtermHost:
             return
         from .task_completion import TaskCompletionBackend
 
-        native = TaskCompletionBackend(self.core_config)
+        consumer_config = deepcopy(self.core_config)
+        consumer_config["operations"] = [resolved if op["operation_id"] == operation["operation_id"] else op
+                                         for op in consumer_config["operations"]]
+        native = TaskCompletionBackend(consumer_config)
         scope, _admin = native.authority()
         cfg = next(
             row
@@ -812,6 +970,12 @@ class MidtermHost:
         ):
             raise PermissionError("operation write domain escapes scope")
         permit = deepcopy(template["permit_template"])
+        if scope.get("token_policy", {}).get("mode") == "observed_cumulative_stop_threshold":
+            binding = {"scope_authorization_ref": str(self.ledger.scope_ref),
+                       "accounting_ref": str(self.ledger.path), "operation_id": operation["operation_id"]}
+            if permit.get("request_scope", binding) != binding:
+                raise PermissionError("model request scope differs from its Host reservation")
+            permit["request_scope"] = binding
         permit.update(
             authorized=True,
             scope=scope["scope_id"],
@@ -1056,6 +1220,7 @@ class MidtermHost:
             phase_ref=self.core_config["phase_ref"],
             gpu_devices=template.get("gpu_devices", []),
             receipt_ref=receipt,
+            mandatory_reserve=template.get("mandatory_reserve"),
             evidence_closure=(
                 operation["kind"] in {"audit", "development_base_collect"}
                 and not operation["dynamic"]
@@ -1186,8 +1351,15 @@ class MidtermHost:
             "limits": template["supervisor_limits"],
             "storage_write_roots": [str(self.ledger.root)],
         }
+        memory_limit = self.ledger.authority().get("runtime_memory_bytes")
+        if memory_limit is not None:
+            context["memory_limit_bytes"] = memory_limit
         from .research_supervision import complete_context
         operation = next(item for item in self.core_config['operations'] if item['operation_id']==identity)
+        from .cpu_command import is_cpu
+        if is_cpu(template):
+            context["dynamic_authorized"] = self.ledger.authority().get("dynamic_authorized", False)
+            context["cpu_authorization_ref"] = template["permit_ref"]
         context = complete_context(self,operation,context)
         if "command" in template and template.get("permit_ref"):
             from .fixed_command import fixed_storage_context
@@ -1241,11 +1413,14 @@ class MidtermHost:
             marker = template.get("start_marker_ref")
             if marker is not None:
                 actual[counter] = budget[counter] if Path(marker).exists() else 0
+        if "wall_seconds" in budget:
+            actual["wall_seconds"] = report["wall_seconds"]
         if "gpu_seconds" in budget:
             actual["gpu_seconds"] = report["gpu_device_seconds_envelope"]
         if "storage_bytes" in budget:
             actual["storage_bytes"] = report.get('business_storage_delta_bytes',report["storage_bytes"])
         # Native consumers own request telemetry. Read actual forward records, never estimates.
+        token_unknown = []
         output = Path(template["output_ref"]) if template.get("output_ref") else None
         if (
             "model_requests" in budget
@@ -1270,6 +1445,27 @@ class MidtermHost:
             )
             if "research_requests" in budget:
                 actual["research_requests"] = actual["model_requests"]
+            request_scope = native_context.get("request_scope")
+            if request_scope:
+                if (Path(request_scope["scope_authorization_ref"]).resolve() != self.ledger.scope_ref
+                        or Path(request_scope["accounting_ref"]).resolve() != self.ledger.path
+                        or request_scope["operation_id"] != identity):
+                    raise ValueError("native request scope differs from the reserved operation")
+                from .adapters.runtime_closure import request_usage
+                usage, missing = request_usage(events, expected_requests=gate["requests_forwarded"], require_reasoning=True)
+                terminals = [event for event in events if event.get("kind") == "response_terminal"]
+                response_ids = [event.get("response_id") for event in terminals]
+                unattributed = (len(terminals) != actual["model_requests"]
+                                or any(event.get("backend_model") != native_context["planner"]["model"] for event in terminals)
+                                or any(not isinstance(value, str) or not value for value in response_ids)
+                                or len(response_ids) != len(set(response_ids)))
+                for name in ("input_tokens", "output_tokens"):
+                    if name not in budget:
+                        raise ValueError("observed token dimension missing from operation registration")
+                    if usage[name] is not None:
+                        actual[name] = usage[name]
+                    if missing or unattributed:
+                        token_unknown.append(name)
         if "current_disk_bytes" in budget:
             actual["current_disk_bytes"] = report["storage_accounting"][
                 "current_new_bytes"
@@ -1280,6 +1476,11 @@ class MidtermHost:
             measurements = fixed_measurements(self, identity, template, report)
             actual.update(measurements["actual"])
             charge_fixed_phase(self, identity, measurements)
+        else:
+            from .cpu_command import is_cpu, measurements as cpu_measurements
+            if is_cpu(template):
+                measurements = cpu_measurements(self, identity, template, report)
+                actual.update(measurements["actual"])
         completed = (
             report["status"] == "completed"
             and report["exit_code"] == 0
@@ -1287,7 +1488,7 @@ class MidtermHost:
         )
         self.ledger.settle(
             identity, actual=actual, cleanup_confirmed=report["cleanup_confirmed"],
-            unknown_dimensions=measurements["unknown_dimensions"] if measurements else (),
+            unknown_dimensions=tuple(sorted(set(token_unknown) | set(measurements["unknown_dimensions"] if measurements else ()))),
         )
         from .research_supervision import bill_control
         bill_control(self,identity,report)
@@ -1300,7 +1501,8 @@ class MidtermHost:
                 "supervisor_ref": str(job / "supervisor.json"),
                 "actual": actual,
                 "cleanup_confirmed": report["cleanup_confirmed"],
-                **({"fixed_receipt_evidence": measurements["evidence"], "unknown_dimensions": measurements["unknown_dimensions"]} if measurements else {}),
+                **({"fixed_receipt_evidence": measurements["evidence"]} if measurements else {}),
+                "unknown_dimensions": sorted(set(token_unknown) | set(measurements["unknown_dimensions"] if measurements else ())),
             },
         )
 
@@ -2263,9 +2465,13 @@ def engineering_probe(operation_id, directory, seconds):
         },
     )
     time.sleep(seconds)
+    permit_ref = os.environ.get("RSI_CPU_PERMIT_REF")
+    cpu_binding = read(permit_ref) if permit_ref else None
     atomic_json(
         root / "result.json",
         {
+            **({"schema": "rsi-cpu-operation-result-v1", "scope_id": cpu_binding["scope_id"],
+                "version": cpu_binding["version"]} if cpu_binding else {}),
             "operation_id": operation_id,
             "owner_uid": os.getuid(),
             "status": "completed",
@@ -2354,6 +2560,7 @@ def prepare_deployment(
         autoloop_home=str(hub_home),
         engineering_probe_id=probe_id,
         engineering_probe_dir=str(probe_dir),
+        p1_control_enabled=bool(core.get("p1_acceptance")),
     )
     config["operations"][probe_id].update(
         command=[
@@ -2365,11 +2572,15 @@ def prepare_deployment(
             "--probe-directory",
             str(probe_dir),
             "--probe-seconds",
-            "12",
+            "20" if core.get("p1_acceptance") else "12",
         ],
         result_ref=str(probe_dir / "result.json"),
+        permit_ref=str(root / "operator/cpu_permits" / (probe_id + ".json")),
+        permit_template={"kind": "generic-cpu-model0"},
+        cpu_purpose="analysis", version="host-engineering-probe-v1",
+        storage_write_roots=[str(probe_dir)],
         admission_lease_ref=str(root / "operator/engineering-admission.lock"),
-        supervisor_limits={"wall_seconds": 30, "storage_bytes": 64 * 1024**2},
+        supervisor_limits={"wall_seconds": 40 if core.get("p1_acceptance") else 30, "storage_bytes": 64 * 1024**2},
     )
     atomic_json(configuration_ref, config)
     atomic_json(hub_home / "rules.json", build_autoloop_rules(config))
@@ -3005,19 +3216,17 @@ def monitor_deployment(configuration_ref):
     ).open("a")
     fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
     lease_released = False
-    atomic_json(
-        evidence / "total-start.json",
-        hub_request(
-            config,
-            "/v1/events",
-            event={
-                "id": config["scope_id"] + "-total-start",
-                "type": "midterm.start",
-                "subject": config["scope_id"],
-                "summary": "one authorized total start",
-            },
-        ),
-    )
+    start_event = {
+        "id": config["scope_id"] + "-total-start",
+        "type": "midterm.start", "subject": config["scope_id"],
+        "summary": "one authorized total start",
+    }
+    started = hub_request(config, "/v1/events", event=start_event)
+    atomic_json(evidence / "total-start.json", started)
+    if config.get("p1_control_enabled"):
+        duplicate = hub_request(config, "/v1/events", event=start_event)
+        atomic_json(evidence / "total-start-deliveries.json",
+                    {"event": start_event, "deliveries": [started, duplicate]})
     restarted = False
     while utcnow() < timestamp(host.ledger.authority(active=False)["expires_at"]):
         view = hub_request(config, "/v1/state")
@@ -3038,6 +3247,15 @@ def monitor_deployment(configuration_ref):
             and read(wait_ref)["waited_seconds"] > 0
             and completed_runs
         ):
+            if config.get("p1_control_enabled"):
+                from .p1_acceptance import exercise_controls
+                exercise_controls(host, evidence, phase="pause")
+                atomic_json(evidence / "pause-resume-control-delivery.json", hub_request(
+                    config, "/v1/events", event={
+                        "id": config["scope_id"] + "-p1-pause-resume-control",
+                        "type": "midterm.p1-control", "subject": config["scope_id"],
+                        "summary": "registered pre-submission pause probe resumed; no node dispatched",
+                    }))
             fcntl.flock(lease, fcntl.LOCK_UN)
             lease.close()
             lease_released = True
@@ -3099,6 +3317,18 @@ def monitor_deployment(configuration_ref):
                 },
             )
             restarted = True
+            if config.get("p1_control_enabled"):
+                deliveries = read(evidence / "total-start-deliveries.json")
+                deliveries["deliveries"].append(hub_request(config, "/v1/events", event=start_event))
+                atomic_json(evidence / "total-start-deliveries.json", deliveries)
+                from .p1_acceptance import exercise_controls
+                exercise_controls(host, evidence)
+                atomic_json(evidence / "resume-control-delivery.json", hub_request(
+                    config, "/v1/events", event={
+                        "id": config["scope_id"] + "-p1-resume-control",
+                        "type": "midterm.p1-control", "subject": config["scope_id"],
+                        "summary": "registered engineering control probe resumed; no business-node dispatch",
+                    }))
         state = host.coordinator().status()
         timer_runs = [
             run

@@ -18,6 +18,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from rpent.planner.codex import _Recorder
 from rpent.robots.components.pi05_vla_server import (
@@ -26,6 +27,32 @@ from rpent.robots.components.pi05_vla_server import (
     build_model_cfg,
 )
 from rpent.session.runtime import RuntimeJournal
+
+
+def test_actual_journal_freezes_rules_and_rejects_changed_launch_input(tmp_path):
+    rules_ref = tmp_path / "rules.json"
+    rules = {
+        "schema": "rsi-runtime-rules-v2",
+        "chunk_steps": 5,
+        "baseline_chunk_steps": 5,
+        "finish_requires_native_success": True,
+    }
+    rules_ref.write_text(json.dumps(rules))
+    context = {
+        "run_id": "bound-run",
+        "episode_id": "episode",
+        "bundle_id": "bundle",
+        "protocol_id": "protocol",
+        "output_dir": str(tmp_path / "first"),
+        "runtime_rules_ref": str(rules_ref),
+        "execution_binding": {"references": {"phi_ref": rules}},
+    }
+    journal = RuntimeJournal(context)
+    rules_ref.write_text(json.dumps({**rules, "chunk_steps": 2}))
+    assert journal.chunk_steps == 5
+    assert journal.finish_requires_native_success is True
+    with pytest.raises(ValueError, match="frozen job binding"):
+        RuntimeJournal({**context, "output_dir": str(tmp_path / "second")})
 
 
 def test_interrupted_model_turn_is_not_normal_attempt_close():
